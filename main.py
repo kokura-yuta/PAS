@@ -46,11 +46,11 @@ def save_message(role, content):
 def load_messages():
     db = SessionLocal()
 
-    messages = db.query(ChatMessage).order_by(ChatMessage.created_at).all()
+    messages = db.query(ChatMessage).order_by(ChatMessage.created_at.desc()).limit(10).all()
 
     history =""
 
-    for msg in messages:
+    for msg in reversed(messages):
         history += f"{msg.role}: {msg.content}\n"
     
     db.close()
