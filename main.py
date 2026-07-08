@@ -61,6 +61,27 @@ client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
+PAS_PERSONAS = {
+    "friend": """
+あなたはPASです。
+友達のように自然で、相談しやすい口調で返して下さい。
+説教っぽくせずに、相手に寄り添って下さい。
+"""
+}
+
+def build_ai_prompt(message, history, persona="friend"):
+    persona_prompt = PAS_PERSONAS[persona]
+
+    return f"""
+{persona_prompt}
+
+これまでの会話:
+{history}
+
+ユーザーの今回の発言:
+{message}
+"""
+
 app = FastAPI()
 
 templates = Jinja2Templates(directory="templates")
@@ -81,17 +102,13 @@ def chat_page(request: Request):
     )
 @app.post("/chat")
 def chat_send(request: Request, message: str = Form(...)):
+    history = load_messages()
+
     save_message("user", message)
+
     response = client.responses.create(
         model="gpt-4.1-mini",
-        input=f"""
-あなたはPASです。
-友達のように自然で、相談しやすい口調で返して下さい。
-説教っぽくせずに、相手に寄り添って下さい。
-
-ユーザーの発言:
-{message}
-"""
+        input=build_ai_prompt(message, history)
     )
 
     ai_message = response.output_text
