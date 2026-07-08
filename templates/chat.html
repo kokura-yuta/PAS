@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>PAS Chat</title>
+</head>
+<body>
+    <h1>PAS Chat</h1>
+    <form method="post" action="/chat">
+        <input type="text" name="message" placeholder="PASに話してみる">
+        <button type="submit">送信</button>
+    </form>
+
+    {% if message %}
+        <p>あなた: {{ message }}</p>
+    {% endif %}
+
+    {% if ai_message %}
+        <p>PAS : {{ ai_message }}</p>
+    {% endif %}
+
+    <a href="/">ホームへ戻る</a>
+</body>
+</html>
