@@ -61,6 +61,11 @@
 
                 <div>
                     <h3>PASが覚えていること</h3>
+                    {% if home_snapshot.pending_memory_count %}
+                        <a class="inline-notice-link" href="/memories">
+                            確認待ちの記憶が{{ home_snapshot.pending_memory_count }}件あります
+                        </a>
+                    {% endif %}
                     {% if home_snapshot.key_memories %}
                         {% for memory in home_snapshot.key_memories %}
                             <p>{{ memory }}</p>

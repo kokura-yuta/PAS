@@ -380,6 +380,14 @@ body {
     font-weight: 700;
 }
 
+.inline-notice-link {
+    display: inline-block;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-weight: 700;
+    text-decoration: none;
+}
+
 .memory-list {
     max-width: 560px;
     margin: 16px auto 0;
@@ -389,6 +397,102 @@ body {
 
 .memory-list li {
     margin-bottom: 18px;
+}
+
+.memory-section {
+    max-width: 680px;
+    margin: 0 auto 32px;
+}
+
+.memory-section > p {
+    color: var(--subtle);
+    line-height: 1.7;
+}
+
+.memory-cards {
+    display: grid;
+    gap: 14px;
+}
+
+.memory-card {
+    padding: 16px;
+    border: 1px solid var(--field-border);
+    border-radius: 14px;
+    background: var(--field-bg);
+}
+
+.memory-card-pending {
+    border-color: color-mix(in srgb, var(--accent) 48%, var(--field-border));
+}
+
+.memory-card-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.memory-card-header span {
+    padding: 4px 9px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 700;
+}
+
+.memory-card p {
+    margin: 0 0 10px;
+    line-height: 1.7;
+}
+
+.memory-card small {
+    color: var(--subtle);
+    line-height: 1.6;
+}
+
+.memory-edit {
+    margin-top: 12px;
+}
+
+.memory-edit summary {
+    color: var(--muted);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.memory-edit form {
+    display: grid;
+    gap: 12px;
+    max-width: none;
+    margin: 12px 0 0;
+}
+
+.memory-edit label {
+    font-size: 14px;
+}
+
+.memory-edit textarea {
+    min-height: 86px;
+}
+
+.memory-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 12px;
+}
+
+.memory-actions form {
+    max-width: none;
+    margin: 0;
+}
+
+.page button.secondary-button {
+    background: transparent;
+    color: var(--muted);
+    border: 1px solid var(--field-border);
 }
 
 .page form {

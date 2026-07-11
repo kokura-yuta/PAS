@@ -12,7 +12,7 @@ import secrets
 from urllib.parse import quote
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, or_
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
@@ -58,6 +58,10 @@ THREAD_TYPE_LABELS = {
 MEMORY_SOURCE_LABELS = {
     "user_statement": "本人発言",
     "ai_inference": "AI推測"
+}
+MEMORY_STATUS_LABELS = {
+    "confirmed": "確定",
+    "pending": "確認待ち"
 }
 
 
@@ -139,6 +143,7 @@ class Memory(Base):
     importance = Column(Integer, default=3)
     confidence = Column(Float, default=0.7)
     source_type = Column(String(50), default="ai_inference")
+    status = Column(String(50), default="confirmed")
     is_active = Column(Boolean, default=True)
     last_confirmed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -263,6 +268,7 @@ def ensure_memory_metadata_columns():
         "importance": "INTEGER DEFAULT 3",
         "confidence": "DOUBLE PRECISION DEFAULT 0.7",
         "source_type": "VARCHAR(50) DEFAULT 'ai_inference'",
+        "status": "VARCHAR(50) DEFAULT 'confirmed'",
         "is_active": "BOOLEAN DEFAULT TRUE",
         "last_confirmed_at": "TIMESTAMP"
     }
@@ -616,6 +622,28 @@ def format_source_label(source_type):
     return MEMORY_SOURCE_LABELS[source_type]
 
 
+def normalize_memory_status(value):
+    if value == "pending":
+        return "pending"
+
+    return "confirmed"
+
+
+def format_memory_status_label(status):
+    status = normalize_memory_status(status)
+    return MEMORY_STATUS_LABELS[status]
+
+
+def decide_memory_status(source_type, confidence):
+    source_type = normalize_source_type(source_type)
+    confidence = normalize_confidence(confidence)
+
+    if source_type == "user_statement" and confidence >= 0.8:
+        return "confirmed"
+
+    return "pending"
+
+
 def format_date(value):
     if value is None:
         return ""
@@ -629,6 +657,7 @@ def save_memory(
     importance=3,
     confidence=0.7,
     source_type="ai_inference",
+    status=None,
     user_id=None
 ):
     content = (content or "").strip()
@@ -636,6 +665,7 @@ def save_memory(
     importance = normalize_importance(importance)
     confidence = normalize_confidence(confidence)
     source_type = normalize_source_type(source_type)
+    status = normalize_memory_status(status or decide_memory_status(source_type, confidence))
 
     if not content or not category:
         return None
@@ -650,8 +680,9 @@ def save_memory(
             importance=importance,
             confidence=confidence,
             source_type=source_type,
+            status=status,
             is_active=True,
-            last_confirmed_at=datetime.utcnow() if source_type == "user_statement" else None
+            last_confirmed_at=datetime.utcnow() if status == "confirmed" else None
         )
 
         db.add(new_memory)
@@ -668,6 +699,7 @@ def save_or_update_memory(
     importance=3,
     confidence=0.7,
     source_type="ai_inference",
+    status=None,
     user_id=None
 ):
     content = (content or "").strip()
@@ -675,6 +707,7 @@ def save_or_update_memory(
     importance = normalize_importance(importance)
     confidence = normalize_confidence(confidence)
     source_type = normalize_source_type(source_type)
+    status = normalize_memory_status(status or decide_memory_status(source_type, confidence))
 
     if not content or not category:
         return None
@@ -692,6 +725,7 @@ def save_or_update_memory(
         )
 
         if existing_memory:
+            current_status = normalize_memory_status(existing_memory.status)
             existing_memory.importance = max(
                 normalize_importance(existing_memory.importance),
                 importance
@@ -704,7 +738,12 @@ def save_or_update_memory(
             if existing_memory.source_type != "user_statement":
                 existing_memory.source_type = source_type
 
-            existing_memory.last_confirmed_at = datetime.utcnow()
+            if current_status == "confirmed" or status == "confirmed":
+                existing_memory.status = "confirmed"
+                existing_memory.last_confirmed_at = datetime.utcnow()
+            else:
+                existing_memory.status = "pending"
+
             db.commit()
             return existing_memory.id
 
@@ -715,8 +754,9 @@ def save_or_update_memory(
             importance=importance,
             confidence=confidence,
             source_type=source_type,
+            status=status,
             is_active=True,
-            last_confirmed_at=datetime.utcnow() if source_type == "user_statement" else None
+            last_confirmed_at=datetime.utcnow() if status == "confirmed" else None
         )
 
         db.add(new_memory)
@@ -735,6 +775,7 @@ def load_memories(user_id):
             db.query(Memory)
             .filter(Memory.user_id == user_id)
             .filter(Memory.is_active.is_(True))
+            .filter(or_(Memory.status == "confirmed", Memory.status.is_(None)))
             .order_by(
                 Memory.importance.desc(),
                 Memory.confidence.desc(),
@@ -789,6 +830,9 @@ def load_memory_items(user_id):
                 "confidence": normalize_confidence(memory.confidence),
                 "source_type": normalize_source_type(memory.source_type),
                 "source_label": format_source_label(memory.source_type),
+                "status": normalize_memory_status(memory.status),
+                "status_label": format_memory_status_label(memory.status),
+                "is_pending": normalize_memory_status(memory.status) == "pending",
                 "is_active": memory.is_active,
                 "last_confirmed_at": memory.last_confirmed_at,
                 "last_confirmed_text": format_date(memory.last_confirmed_at),
@@ -799,6 +843,61 @@ def load_memory_items(user_id):
         return memory_items
     finally:
         db.close()
+
+
+def confirm_memory(memory_id, user_id):
+    db = SessionLocal()
+
+    try:
+        memory = (
+            db.query(Memory)
+            .filter(Memory.id == memory_id)
+            .filter(Memory.user_id == user_id)
+            .filter(Memory.is_active.is_(True))
+            .first()
+        )
+
+        if memory:
+            memory.status = "confirmed"
+            memory.confidence = max(normalize_confidence(memory.confidence), 0.9)
+            memory.last_confirmed_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+
+
+def update_memory(memory_id, user_id, content, category, importance=3, confidence=0.9):
+    content = (content or "").strip()
+    category = (category or "").strip()
+    importance = normalize_importance(importance)
+    confidence = max(normalize_confidence(confidence), 0.9)
+
+    if not content or not category:
+        return
+
+    db = SessionLocal()
+
+    try:
+        memory = (
+            db.query(Memory)
+            .filter(Memory.id == memory_id)
+            .filter(Memory.user_id == user_id)
+            .filter(Memory.is_active.is_(True))
+            .first()
+        )
+
+        if memory:
+            memory.content = content
+            memory.category = category
+            memory.importance = importance
+            memory.confidence = confidence
+            memory.source_type = "user_statement"
+            memory.status = "confirmed"
+            memory.last_confirmed_at = datetime.utcnow()
+            db.commit()
+    finally:
+        db.close()
+
 
 def delete_memory(memory_id, user_id):
     db = SessionLocal()
@@ -1444,9 +1543,18 @@ def load_home_snapshot(user_id):
             db.query(Memory)
             .filter(Memory.user_id == user_id)
             .filter(Memory.is_active.is_(True))
+            .filter(or_(Memory.status == "confirmed", Memory.status.is_(None)))
             .order_by(Memory.importance.desc(), Memory.confidence.desc())
             .limit(3)
             .all()
+        )
+
+        pending_memory_count = (
+            db.query(Memory)
+            .filter(Memory.user_id == user_id)
+            .filter(Memory.is_active.is_(True))
+            .filter(Memory.status == "pending")
+            .count()
         )
 
         timeline_items = (
@@ -1494,7 +1602,8 @@ def load_home_snapshot(user_id):
             "today_events": today_event_items,
             "active_goals": goal_items,
             "key_memories": memory_items,
-            "timeline_items": timeline_texts
+            "timeline_items": timeline_texts,
+            "pending_memory_count": pending_memory_count
         }
     finally:
         db.close()
@@ -1551,6 +1660,7 @@ importance は 1〜5 の整数で、長期的に重要なほど高くしてく�
 confidence は 0〜1 の数値で、ユーザーが明言した情報ほど高くしてください。
 source_type は user_statement または ai_inference にしてください。
 ユーザーがはっきり言った事実は user_statement、文脈からの推測は ai_inference にしてください。
+ai_inference の confidence は 0.65 以下にしてください。推測を事実のように扱わないでください。
 content は1つの記憶だけを短い1文にしてください。
 同じ内容の記憶が増えにくいように、できるだけ「ユーザーは〜」から始めて具体的に書いてください。
 
@@ -2040,12 +2150,16 @@ def memories_page(request: Request):
         return RedirectResponse(url="/login", status_code=303)
 
     memories = load_memory_items(current_user.id)
+    pending_memories = [memory for memory in memories if memory["is_pending"]]
+    confirmed_memories = [memory for memory in memories if not memory["is_pending"]]
     settings = load_settings(current_user.id)
     return templates.TemplateResponse(
         request=request,
         name="memories.html",
         context={
             "memories": memories,
+            "pending_memories": pending_memories,
+            "confirmed_memories": confirmed_memories,
             "settings": settings
         }
     )
@@ -2504,4 +2618,40 @@ def delete_memory_action(request: Request, memory_id: int):
         return RedirectResponse(url="/login", status_code=303)
 
     delete_memory(memory_id, current_user.id)
+    return RedirectResponse(url="/memories", status_code=303)
+
+
+@app.post("/memories/{memory_id}/confirm")
+def confirm_memory_action(request: Request, memory_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    confirm_memory(memory_id, current_user.id)
+    return RedirectResponse(url="/memories", status_code=303)
+
+
+@app.post("/memories/{memory_id}/update")
+def update_memory_action(
+    request: Request,
+    memory_id: int,
+    content: str = Form(""),
+    category: str = Form(""),
+    importance: int = Form(3),
+    confidence: float = Form(0.9)
+):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    update_memory(
+        memory_id=memory_id,
+        user_id=current_user.id,
+        content=content,
+        category=category,
+        importance=importance,
+        confidence=confidence
+    )
     return RedirectResponse(url="/memories", status_code=303)
