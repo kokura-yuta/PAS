@@ -11,7 +11,7 @@
         <header class="chat-header">
             <div>
                 <p class="eyebrow">PAS Chat</p>
-                <h1>PAS</h1>
+                <h1>{{ thread_title if thread_title else "PAS" }}</h1>
             </div>
 
             <a href="/settings">性格を変更する</a>
@@ -36,7 +36,7 @@
             {% endif %}
         </section>
 
-        <form class="chat-form" method="post" action="/chat">
+        <form class="chat-form" method="post" action="/chat/{{ thread_id }}">
             <input type="text" name="message" placeholder="PASに話してみる" autocomplete="off" required>
             <button type="submit">送信</button>
         </form>

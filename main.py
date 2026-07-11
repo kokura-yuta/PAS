@@ -6,7 +6,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
@@ -33,6 +33,7 @@ class ChatMessage(Base):
     __tablename__="chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
+    thread_id = Column(Integer, index=True)
     role = Column(String(20))
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -103,15 +104,90 @@ class Settings(Base):
 
 Base.metadata.create_all(bind=engine)
 
-def save_message(role, content):
+def ensure_chat_message_thread_id_column():
+    inspector = inspect(engine)
+    columns = inspector.get_columns("chat_messages")
+    column_names = [column["name"] for column in columns]
+
+    if "thread_id" not in column_names:
+        with engine.begin() as connection:
+            connection.execute(text("ALTER TABLE chat_messages ADD COLUMN thread_id INTEGER"))
+
+ensure_chat_message_thread_id_column()
+
+def get_or_create_diary_thread():
+    db = SessionLocal()
+
+    try:
+        diary_thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.thread_type == "diary")
+            .first()
+        )
+
+        if diary_thread is None:
+            diary_thread = ChatThread(
+                title="日記",
+                thread_type="diary"
+            )
+            db.add(diary_thread)
+            db.commit()
+            db.refresh(diary_thread)
+
+        updated_count = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.thread_id.is_(None))
+            .update({"thread_id": diary_thread.id})
+        )
+
+        if updated_count:
+            db.commit()
+
+        return diary_thread
+    finally:
+        db.close()
+
+def load_chat_thread(thread_id):
+    db = SessionLocal()
+
+    try:
+        thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+
+        return thread
+    finally:
+        db.close()
+
+def load_chat_threads():
+    db = SessionLocal()
+
+    try:
+        threads = (
+            db.query(ChatThread)
+            .order_by(ChatThread.updated_at.desc())
+            .all()
+        )
+
+        return threads
+    finally:
+        db.close()
+
+def save_message(role, content, thread_id=None):
     db = SessionLocal()
     try:
         new_message = ChatMessage(
+            thread_id=thread_id,
             role=role,
             content=content
         )
 
         db.add(new_message)
+
+        if thread_id is not None:
+            thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+
+            if thread:
+                thread.updated_at = datetime.utcnow()
+
         db.commit()
     finally: 
         db.close()
@@ -314,11 +390,16 @@ def format_goals_for_prompt(goals):
 
     return goals_text
 
-def load_messages():
+def load_messages(thread_id=None):
     db = SessionLocal()
 
     try:
-        messages = db.query(ChatMessage).order_by(ChatMessage.created_at.desc()).limit(CHAT_HISTORY_LIMIT).all()
+        query = db.query(ChatMessage)
+
+        if thread_id is not None:
+            query = query.filter(ChatMessage.thread_id == thread_id)
+
+        messages = query.order_by(ChatMessage.created_at.desc()).limit(CHAT_HISTORY_LIMIT).all()
 
         history =""
 
@@ -329,16 +410,16 @@ def load_messages():
     finally:
         db.close()
 
-def load_chat_items():
+def load_chat_items(thread_id=None):
     db = SessionLocal()
 
     try:
-        messages = (
-            db.query(ChatMessage)
-            .order_by(ChatMessage.created_at.desc())
-            .limit(CHAT_DISPLAY_LIMIT)
-            .all()
-        )
+        query = db.query(ChatMessage)
+
+        if thread_id is not None:
+            query = query.filter(ChatMessage.thread_id == thread_id)
+
+        messages = query.order_by(ChatMessage.created_at.desc()).limit(CHAT_DISPLAY_LIMIT).all()
 
         chat_items = []
 
@@ -532,26 +613,56 @@ templates = Jinja2Templates(directory="templates")
 @app.get("/")
 def home(request: Request):
     settings = load_settings()
+    get_or_create_diary_thread()
+    chat_threads = load_chat_threads()
+
     return templates.TemplateResponse(
         request=request,
         name="home.html",
         context={
-            "settings": settings
+            "settings": settings,
+            "chat_threads": chat_threads
         }
     )
 
 @app.get("/chat")
 def chat_page(request: Request):
     settings = load_settings()
-    chat_items = load_chat_items()
+    diary_thread = get_or_create_diary_thread()
+    chat_items = load_chat_items(diary_thread.id)
+
     return templates.TemplateResponse(
         request=request,
         name="chat.html",
         context={
             "settings": settings,
-            "chat_items": chat_items
+            "chat_items": chat_items,
+            "thread_id": diary_thread.id,
+            "thread_title": diary_thread.title
         }
     )
+
+@app.get("/chat/{thread_id}")
+def chat_thread_page(request: Request, thread_id: int):
+    settings = load_settings()
+    thread = load_chat_thread(thread_id)
+
+    if thread is None:
+        return RedirectResponse(url="/", status_code=303)
+
+    chat_items = load_chat_items(thread_id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="chat.html",
+        context={
+            "settings": settings,
+            "chat_items": chat_items,
+            "thread_id": thread_id,
+            "thread_title": thread.title
+        }
+    )
+
 @app.get("/memories")
 def memories_page(request: Request):
     memories = load_memory_items()
@@ -671,14 +782,19 @@ def settings_save(
 
     return RedirectResponse(url="/settings", status_code=303)
 
-@app.post("/chat")
-def chat_send(request: Request, message: str = Form(...)):
+@app.post("/chat/{thread_id}")
+def chat_send(request: Request, thread_id: int, message: str = Form(...)):
+    thread = load_chat_thread(thread_id)
+
+    if thread is None:
+        return RedirectResponse(url="/", status_code=303)
+
     clean_message = message.strip()
 
     if not clean_message:
-        return RedirectResponse(url="/chat", status_code=303)
+        return RedirectResponse(url=f"/chat/{thread_id}", status_code=303)
 
-    history = load_messages()
+    history = load_messages(thread_id)
     memories = load_memories()
     profile = load_profile()
     profile_text = format_profile_for_prompt(profile)
@@ -688,7 +804,7 @@ def chat_send(request: Request, message: str = Form(...)):
     persona = settings.default_persona
     response_length = settings.response_length
 
-    save_message("user", clean_message)
+    save_message("user", clean_message, thread_id)
 
     memory_data = {
         "should_save": False,
@@ -719,8 +835,8 @@ def chat_send(request: Request, message: str = Form(...)):
 
     ai_message = response.output_text
 
-    save_message("assistant", ai_message)
-    chat_items = load_chat_items()
+    save_message("assistant", ai_message, thread_id)
+    chat_items = load_chat_items(thread_id)
 
     
     return templates.TemplateResponse(
@@ -728,7 +844,9 @@ def chat_send(request: Request, message: str = Form(...)):
         name="chat.html",
         context={
             "chat_items": chat_items,
-            "settings": settings
+            "settings": settings,
+            "thread_id": thread_id,
+            "thread_title": thread.title
             }
     )
 

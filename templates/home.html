@@ -23,6 +23,23 @@
             <a href="/goals">目標を管理する</a>
             <a href="/settings">設定</a>
         </nav>
+
+        <section class="thread-list">
+            <h2>チャット</h2>
+
+            {% if chat_threads %}
+                <div class="thread-links">
+                    {% for thread in chat_threads %}
+                        <a href="/chat/{{ thread.id }}">
+                            <span>{{ thread.title }}</span>
+                            <small>{{ "日記" if thread.thread_type == "diary" else "自由チャット" }}</small>
+                        </a>
+                    {% endfor %}
+                </div>
+            {% else %}
+                <p>チャットはまだありません。</p>
+            {% endif %}
+        </section>
     </main>
 </body>
 </html>

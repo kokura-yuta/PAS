@@ -94,6 +94,39 @@ body {
     margin-top: 32px;
 }
 
+.thread-list {
+    margin-top: 42px;
+}
+
+.thread-list h2 {
+    margin: 0 0 16px;
+    font-size: 22px;
+}
+
+.thread-links {
+    display: grid;
+    gap: 10px;
+    max-width: 560px;
+}
+
+.thread-links a {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid var(--field-border);
+    border-radius: 8px;
+    background: var(--field-bg);
+    color: var(--text);
+    text-decoration: none;
+}
+
+.thread-links small {
+    color: var(--muted);
+    white-space: nowrap;
+}
+
 .page {
     min-height: 100vh;
     max-width: 720px;
