@@ -20,7 +20,11 @@
                         <small>
                             重要度: {{ memory.importance }}
                             / 確信度: {{ memory.confidence }}
-                            / 情報源: {{ memory.source_type }}
+                            / 情報源: {{ memory.source_label }}
+                            / 保存日: {{ memory.created_at_text }}
+                            {% if memory.last_confirmed_text %}
+                                / 最終確認: {{ memory.last_confirmed_text }}
+                            {% endif %}
                         </small>
 
                         <form method="post" action="/memories/{{ memory.id }}/delete">

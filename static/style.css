@@ -147,7 +147,7 @@ body {
     flex: 1;
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     gap: 12px;
     padding: 14px 16px;
     border: 1px solid var(--field-border);
@@ -157,8 +157,38 @@ body {
     text-decoration: none;
 }
 
-.thread-link small {
+.thread-link span:first-child {
+    min-width: 0;
+}
+
+.thread-link strong {
+    display: block;
+    margin-bottom: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-link small,
+.thread-empty {
     color: var(--muted);
+}
+
+.thread-link span:first-child small {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thread-meta {
+    display: grid;
+    gap: 4px;
+    flex-shrink: 0;
+    text-align: right;
+}
+
+.thread-meta small {
     white-space: nowrap;
 }
 
@@ -173,6 +203,12 @@ body {
     background: transparent;
     color: var(--muted);
     cursor: pointer;
+}
+
+.thread-empty {
+    max-width: 560px;
+    margin: 14px 0 0;
+    line-height: 1.7;
 }
 
 .page {
@@ -307,8 +343,42 @@ body {
     gap: 16px;
 }
 
+.chat-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+}
+
+.chat-actions a {
+    color: var(--muted);
+    font-size: 14px;
+    text-decoration: none;
+}
+
+.thread-description {
+    margin: 14px 0 0;
+    max-width: 620px;
+    color: var(--subtle);
+    line-height: 1.7;
+}
+
 .current-persona {
     color: var(--muted);
+}
+
+.chat-delete-form {
+    margin-top: 10px;
+}
+
+.chat-delete-form button {
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
 }
 
 .chat-log {
@@ -385,6 +455,11 @@ body {
     font-weight: 700;
     cursor: pointer;
 }
+
+.chat-form button:disabled {
+    opacity: 0.65;
+    cursor: wait;
+}
 .chat-page > a {
     display: inline-block;
     margin-top: 16px;
@@ -431,6 +506,14 @@ body {
         align-items: stretch;
     }
 
+    .thread-link {
+        min-width: 0;
+    }
+
+    .thread-meta {
+        font-size: 12px;
+    }
+
     .thread-item button {
         height: 100%;
     }
@@ -469,6 +552,7 @@ body {
 
     .chat-header {
         align-items: flex-start;
+        flex-direction: column;
     }
 
     .chat-header h1 {
@@ -476,9 +560,13 @@ body {
         margin: 0;
     }
 
-    .chat-header a {
+    .chat-actions a {
         font-size: 13px;
         white-space: nowrap;
+    }
+
+    .thread-description {
+        font-size: 14px;
     }
 
     .current-persona {

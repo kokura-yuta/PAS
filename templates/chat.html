@@ -10,17 +10,30 @@
     <main class="chat-page">
         <header class="chat-header">
             <div>
-                <p class="eyebrow">PAS Chat</p>
+                <p class="eyebrow">{{ thread_type_label }}</p>
                 <h1>{{ thread_title if thread_title else "PAS" }}</h1>
             </div>
 
-            <a href="/settings">性格を変更する</a>
+            <div class="chat-actions">
+                <a href="/">戻る</a>
+                <a href="/settings">性格を変更する</a>
+            </div>
         </header>
+
+        {% if thread_description %}
+            <p class="thread-description">{{ thread_description }}</p>
+        {% endif %}
 
         <p class="current-persona">
             現在の性格:
             <strong>{{ settings.default_persona }}</strong>
         </p>
+
+        {% if can_delete_thread %}
+            <form class="chat-delete-form" method="post" action="/chat_threads/{{ thread_id }}/delete">
+                <button type="submit" onclick="return confirm({{ (thread_title ~ 'を削除しますか？このチャット内の会話も削除されます。')|tojson }})">チャットを削除</button>
+            </form>
+        {% endif %}
 
         <section class="chat-log">
             {% if chat_items %}
@@ -37,16 +50,26 @@
         </section>
 
         <form class="chat-form" method="post" action="/chat/{{ thread_id }}">
-            <input type="text" name="message" placeholder="PASに話してみる" autocomplete="off" required>
+            <input type="text" name="message" placeholder="メッセージを入力..." autocomplete="off" required>
             <button type="submit">送信</button>
         </form>
 
-        <a href="/">ホームへ戻る</a>
+        <a class="back-link" href="/">ホームへ戻る</a>
     </main>
     <script>
         window.addEventListener("load", function () {
             window.scrollTo(0, document.body.scrollHeight);
         });
+
+        const chatForm = document.querySelector(".chat-form");
+
+        if (chatForm) {
+            chatForm.addEventListener("submit", function () {
+                const sendButton = chatForm.querySelector("button");
+                sendButton.disabled = true;
+                sendButton.textContent = "送信中";
+            });
+        }
     </script>
 </body>
 </html>

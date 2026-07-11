@@ -28,7 +28,7 @@
             <h2>チャット</h2>
 
             <form class="thread-form" method="post" action="/chat_threads">
-                <input type="text" name="title" placeholder="新しいチャット名" autocomplete="off" required>
+                <input type="text" name="title" placeholder="新しいチャット名" autocomplete="off" maxlength="{{ thread_title_max_length }}" required>
                 <button type="submit">作成</button>
             </form>
 
@@ -37,18 +37,28 @@
                     {% for thread in chat_threads %}
                         <div class="thread-item">
                             <a class="thread-link" href="/chat/{{ thread.id }}">
-                                <span>{{ thread.title }}</span>
-                                <small>{{ "日記" if thread.thread_type == "diary" else "自由チャット" }}</small>
+                                <span>
+                                    <strong>{{ thread.display_title }}</strong>
+                                    <small>{{ thread.latest_message }}</small>
+                                </span>
+                                <span class="thread-meta">
+                                    <small>{{ thread.thread_type_label }}</small>
+                                    <small>{{ thread.updated_at_text }}</small>
+                                </span>
                             </a>
 
-                            {% if thread.thread_type != "diary" %}
+                            {% if thread.can_delete %}
                                 <form method="post" action="/chat_threads/{{ thread.id }}/delete">
-                                    <button type="submit" onclick="return confirm('このチャットを削除しますか？')">削除</button>
+                                    <button type="submit" onclick="return confirm({{ (thread.title ~ 'を削除しますか？このチャット内の会話も削除されます。')|tojson }})">削除</button>
                                 </form>
                             {% endif %}
                         </div>
                     {% endfor %}
                 </div>
+
+                {% if custom_thread_count == 0 %}
+                    <p class="thread-empty">まだ自由チャットはありません。悩みや目的ごとにチャットを作成できます。</p>
+                {% endif %}
             {% else %}
                 <p>チャットはまだありません。</p>
             {% endif %}

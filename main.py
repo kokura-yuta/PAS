@@ -17,6 +17,44 @@ load_dotenv()
 CHAT_HISTORY_LIMIT = 10
 CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
+THREAD_TITLE_MAX_LENGTH = 50
+DIARY_THREAD_TYPE = "diary"
+CUSTOM_THREAD_TYPE = "custom"
+THREAD_TYPE_LABELS = {
+    DIARY_THREAD_TYPE: "日記",
+    CUSTOM_THREAD_TYPE: "自由チャット"
+}
+MEMORY_SOURCE_LABELS = {
+    "user_statement": "本人発言",
+    "ai_inference": "AI推測"
+}
+
+
+def truncate_text(text, max_length=60):
+    text = (text or "").strip()
+
+    if len(text) <= max_length:
+        return text
+
+    return text[:max_length - 1] + "..."
+
+
+def format_datetime(value):
+    if value is None:
+        return ""
+
+    return value.strftime("%Y-%m-%d %H:%M")
+
+
+def get_thread_type_label(thread_type):
+    return THREAD_TYPE_LABELS.get(thread_type, "チャット")
+
+
+def get_thread_description(thread_type):
+    if thread_type == DIARY_THREAD_TYPE:
+        return "今日あったことや、誰にも話せない気持ちを自由に話してください。文章をきれいにまとめる必要はありません。"
+
+    return "テーマごとにPASと話せる自由チャットです。相談、整理、アイデア出しに使えます。"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -148,14 +186,14 @@ def get_or_create_diary_thread():
     try:
         diary_thread = (
             db.query(ChatThread)
-            .filter(ChatThread.thread_type == "diary")
+            .filter(ChatThread.thread_type == DIARY_THREAD_TYPE)
             .first()
         )
 
         if diary_thread is None:
             diary_thread = ChatThread(
                 title="日記",
-                thread_type="diary"
+                thread_type=DIARY_THREAD_TYPE
             )
             db.add(diary_thread)
             db.commit()
@@ -190,21 +228,55 @@ def load_chat_threads():
     try:
         threads = (
             db.query(ChatThread)
-            .order_by(ChatThread.updated_at.desc())
             .all()
         )
 
-        return threads
+        def sort_thread(thread):
+            thread_order = 0 if thread.thread_type == DIARY_THREAD_TYPE else 1
+            updated_at = thread.updated_at or thread.created_at or datetime.utcnow()
+            return (thread_order, -updated_at.timestamp())
+
+        thread_items = []
+
+        for thread in sorted(threads, key=sort_thread):
+            latest_message = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.thread_id == thread.id)
+                .order_by(ChatMessage.created_at.desc())
+                .first()
+            )
+
+            description = get_thread_description(thread.thread_type)
+            latest_text = latest_message.content if latest_message else description
+
+            thread_items.append({
+                "id": thread.id,
+                "title": thread.title,
+                "display_title": truncate_text(thread.title, THREAD_TITLE_MAX_LENGTH),
+                "thread_type": thread.thread_type,
+                "thread_type_label": get_thread_type_label(thread.thread_type),
+                "description": description,
+                "latest_message": truncate_text(latest_text, 54),
+                "updated_at_text": format_datetime(thread.updated_at or thread.created_at),
+                "can_delete": thread.thread_type == CUSTOM_THREAD_TYPE
+            })
+
+        return thread_items
     finally:
         db.close()
 
 def create_chat_thread(title):
+    clean_title = truncate_text(title, THREAD_TITLE_MAX_LENGTH)
+
+    if not clean_title:
+        return None
+
     db = SessionLocal()
 
     try:
         thread = ChatThread(
-            title=title,
-            thread_type="custom"
+            title=clean_title,
+            thread_type=CUSTOM_THREAD_TYPE
         )
 
         db.add(thread)
@@ -221,7 +293,7 @@ def delete_chat_thread(thread_id):
     try:
         thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
 
-        if thread is None or thread.thread_type == "diary":
+        if thread is None or thread.thread_type != CUSTOM_THREAD_TYPE:
             return
 
         db.query(ChatMessage).filter(ChatMessage.thread_id == thread_id).delete()
@@ -251,6 +323,45 @@ def save_message(role, content, thread_id=None):
     finally: 
         db.close()
 
+
+def normalize_importance(value):
+    try:
+        importance = int(value)
+    except (TypeError, ValueError):
+        importance = 3
+
+    return max(1, min(5, importance))
+
+
+def normalize_confidence(value):
+    try:
+        confidence = float(value)
+    except (TypeError, ValueError):
+        confidence = 0.7
+
+    confidence = max(0.0, min(1.0, confidence))
+    return round(confidence, 2)
+
+
+def normalize_source_type(value):
+    if value == "user_statement":
+        return "user_statement"
+
+    return "ai_inference"
+
+
+def format_source_label(source_type):
+    source_type = normalize_source_type(source_type)
+    return MEMORY_SOURCE_LABELS[source_type]
+
+
+def format_date(value):
+    if value is None:
+        return ""
+
+    return value.strftime("%Y-%m-%d")
+
+
 def save_memory(
     content,
     category,
@@ -258,6 +369,15 @@ def save_memory(
     confidence=0.7,
     source_type="ai_inference"
 ):
+    content = (content or "").strip()
+    category = (category or "").strip()
+    importance = normalize_importance(importance)
+    confidence = normalize_confidence(confidence)
+    source_type = normalize_source_type(source_type)
+
+    if not content or not category:
+        return None
+
     db = SessionLocal()
 
     try:
@@ -267,13 +387,79 @@ def save_memory(
             importance=importance,
             confidence=confidence,
             source_type=source_type,
-            is_active=True
+            is_active=True,
+            last_confirmed_at=datetime.utcnow() if source_type == "user_statement" else None
         )
 
         db.add(new_memory)
         db.commit()
+        db.refresh(new_memory)
+        return new_memory.id
     finally:
         db.close()
+
+
+def save_or_update_memory(
+    content,
+    category,
+    importance=3,
+    confidence=0.7,
+    source_type="ai_inference"
+):
+    content = (content or "").strip()
+    category = (category or "").strip()
+    importance = normalize_importance(importance)
+    confidence = normalize_confidence(confidence)
+    source_type = normalize_source_type(source_type)
+
+    if not content or not category:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        existing_memory = (
+            db.query(Memory)
+            .filter(Memory.is_active.is_(True))
+            .filter(Memory.category == category)
+            .filter(Memory.content == content)
+            .first()
+        )
+
+        if existing_memory:
+            existing_memory.importance = max(
+                normalize_importance(existing_memory.importance),
+                importance
+            )
+            existing_memory.confidence = max(
+                normalize_confidence(existing_memory.confidence),
+                confidence
+            )
+
+            if existing_memory.source_type != "user_statement":
+                existing_memory.source_type = source_type
+
+            existing_memory.last_confirmed_at = datetime.utcnow()
+            db.commit()
+            return existing_memory.id
+
+        new_memory = Memory(
+            content=content,
+            category=category,
+            importance=importance,
+            confidence=confidence,
+            source_type=source_type,
+            is_active=True,
+            last_confirmed_at=datetime.utcnow() if source_type == "user_statement" else None
+        )
+
+        db.add(new_memory)
+        db.commit()
+        db.refresh(new_memory)
+        return new_memory.id
+    finally:
+        db.close()
+
 
 def load_memories():
     db = SessionLocal()
@@ -282,16 +468,24 @@ def load_memories():
         memories = (
             db.query(Memory)
             .filter(Memory.is_active.is_(True))
-            .order_by(Memory.created_at)
+            .order_by(
+                Memory.importance.desc(),
+                Memory.confidence.desc(),
+                Memory.created_at.desc()
+            )
             .all()
         )
 
         memory_text = ""
 
         for memory in memories:
+            importance = normalize_importance(memory.importance)
+            confidence = normalize_confidence(memory.confidence)
+            source_type = normalize_source_type(memory.source_type)
+
             memory_text += (
-                f"[{memory.category} / importance:{memory.importance} "
-                f"/ confidence:{memory.confidence} / source:{memory.source_type}] "
+                f"[{memory.category} / importance:{importance} "
+                f"/ confidence:{confidence} / source:{source_type}] "
                 f"{memory.content}\n"
             )
 
@@ -304,7 +498,16 @@ def load_memory_items():
     db = SessionLocal()
 
     try:
-        memories = db.query(Memory).order_by(Memory.created_at.desc()).all()
+        memories = (
+            db.query(Memory)
+            .filter(Memory.is_active.is_(True))
+            .order_by(
+                Memory.importance.desc(),
+                Memory.confidence.desc(),
+                Memory.created_at.desc()
+            )
+            .all()
+        )
 
         memory_items = []
 
@@ -313,12 +516,15 @@ def load_memory_items():
                 "id": memory.id,
                 "category": memory.category,
                 "content": memory.content,
-                "importance": memory.importance,
-                "confidence": memory.confidence,
-                "source_type": memory.source_type,
+                "importance": normalize_importance(memory.importance),
+                "confidence": normalize_confidence(memory.confidence),
+                "source_type": normalize_source_type(memory.source_type),
+                "source_label": format_source_label(memory.source_type),
                 "is_active": memory.is_active,
                 "last_confirmed_at": memory.last_confirmed_at,
-                "created_at": memory.created_at
+                "last_confirmed_text": format_date(memory.last_confirmed_at),
+                "created_at": memory.created_at,
+                "created_at_text": format_date(memory.created_at)
             })
 
         return memory_items
@@ -332,7 +538,7 @@ def delete_memory(memory_id):
         memory = db.query(Memory).filter(Memory.id == memory_id).first()
 
         if memory:
-            db.delete(memory)
+            memory.is_active = False
             db.commit()
     finally:
         db.close()
@@ -569,6 +775,8 @@ importance は 1〜5 の整数で、長期的に重要なほど高くしてく�
 confidence は 0〜1 の数値で、ユーザーが明言した情報ほど高くしてください。
 source_type は user_statement または ai_inference にしてください。
 ユーザーがはっきり言った事実は user_statement、文脈からの推測は ai_inference にしてください。
+content は1つの記憶だけを短い1文にしてください。
+同じ内容の記憶が増えにくいように、できるだけ「ユーザーは〜」から始めて具体的に書いてください。
 
 ユーザーの発言:
 {message}
@@ -670,14 +878,44 @@ PAS_RESPONSE_RULES = """
 
 
 
-def build_ai_prompt(message, history, memories, profile_text, goals_text, persona="friend", response_length="balanced"):
+def build_thread_prompt(thread_title, thread_type):
+    if thread_type == DIARY_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットは日記チャットです。
+ユーザーの感情や出来事を受け止めることを優先してください。
+ユーザーが明確にアドバイスを求めていない場合、すぐに解決策を押しつけず、共感と短い質問を中心にしてください。
+"""
+
+    return f"""
+現在のチャット: {thread_title}
+このチャットは自由チャットです。
+チャット名や会話内容に合わせて、相談・整理・提案・アイデア出しをしてください。
+"""
+
+
+def build_ai_prompt(
+    message,
+    history,
+    memories,
+    profile_text,
+    goals_text,
+    persona="friend",
+    response_length="balanced",
+    thread_title="日記",
+    thread_type=DIARY_THREAD_TYPE
+):
     persona_prompt = PAS_PERSONAS.get(persona, PAS_PERSONAS["friend"])
     length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
+    thread_prompt = build_thread_prompt(thread_title, thread_type)
     return f"""
 {persona_prompt}
 
 PASの返答ルール:
 {PAS_RESPONSE_RULES}
+
+チャットの種類:
+{thread_prompt}
 
 返答の長さ:
 {length_prompt}
@@ -713,13 +951,18 @@ def home(request: Request):
     settings = load_settings()
     get_or_create_diary_thread()
     chat_threads = load_chat_threads()
+    custom_thread_count = sum(
+        1 for thread in chat_threads if thread["thread_type"] == CUSTOM_THREAD_TYPE
+    )
 
     return templates.TemplateResponse(
         request=request,
         name="home.html",
         context={
             "settings": settings,
-            "chat_threads": chat_threads
+            "chat_threads": chat_threads,
+            "custom_thread_count": custom_thread_count,
+            "thread_title_max_length": THREAD_TITLE_MAX_LENGTH
         }
     )
 
@@ -736,7 +979,10 @@ def chat_page(request: Request):
             "settings": settings,
             "chat_items": chat_items,
             "thread_id": diary_thread.id,
-            "thread_title": diary_thread.title
+            "thread_title": diary_thread.title,
+            "thread_description": get_thread_description(diary_thread.thread_type),
+            "thread_type_label": get_thread_type_label(diary_thread.thread_type),
+            "can_delete_thread": False
         }
     )
 
@@ -757,7 +1003,10 @@ def chat_thread_page(request: Request, thread_id: int):
             "settings": settings,
             "chat_items": chat_items,
             "thread_id": thread_id,
-            "thread_title": thread.title
+            "thread_title": thread.title,
+            "thread_description": get_thread_description(thread.thread_type),
+            "thread_type_label": get_thread_type_label(thread.thread_type),
+            "can_delete_thread": thread.thread_type == CUSTOM_THREAD_TYPE
         }
     )
 
@@ -768,7 +1017,10 @@ def chat_thread_create(title: str = Form("")):
     if not clean_title:
         return RedirectResponse(url="/", status_code=303)
 
-    thread = create_chat_thread(clean_title[:200])
+    thread = create_chat_thread(clean_title)
+
+    if thread is None:
+        return RedirectResponse(url="/", status_code=303)
 
     return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
 
@@ -931,7 +1183,17 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     }
 
     if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
-        memory_data = extract_memory_from_message(clean_message)
+        try:
+            memory_data = extract_memory_from_message(clean_message)
+        except Exception:
+            memory_data = {
+                "should_save": False,
+                "category": "",
+                "content": "",
+                "importance": 0,
+                "confidence": 0,
+                "source_type": ""
+            }
 
     should_save_memory = (
         memory_data.get("should_save")
@@ -940,7 +1202,7 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     )
 
     if should_save_memory:
-        save_memory(
+        save_or_update_memory(
             content=memory_data["content"],
             category=memory_data["category"],
             importance=memory_data.get("importance", 3),
@@ -949,15 +1211,41 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
         )
 
 
-    response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=build_ai_prompt(clean_message, history, memories, profile_text, goals_text, persona, response_length)
-    )
+    ai_message = ""
+    should_save_ai_message = True
 
-    ai_message = response.output_text
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=build_ai_prompt(
+                clean_message,
+                history,
+                memories,
+                profile_text,
+                goals_text,
+                persona,
+                response_length,
+                thread.title,
+                thread.thread_type
+            )
+        )
 
-    save_message("assistant", ai_message, thread_id)
+        ai_message = response.output_text
+    except Exception:
+        ai_message = "PASの回答を生成できませんでした。もう一度送信してください。"
+        should_save_ai_message = False
+
+    if should_save_ai_message:
+        save_message("assistant", ai_message, thread_id)
+
     chat_items = load_chat_items(thread_id)
+
+    if not should_save_ai_message:
+        chat_items.append({
+            "role": "assistant",
+            "content": ai_message,
+            "created_at": datetime.utcnow()
+        })
 
     
     return templates.TemplateResponse(
@@ -967,7 +1255,10 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
             "chat_items": chat_items,
             "settings": settings,
             "thread_id": thread_id,
-            "thread_title": thread.title
+            "thread_title": thread.title,
+            "thread_description": get_thread_description(thread.thread_type),
+            "thread_type_label": get_thread_type_label(thread.thread_type),
+            "can_delete_thread": thread.thread_type == CUSTOM_THREAD_TYPE
             }
     )
 
