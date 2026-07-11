@@ -1655,7 +1655,7 @@ def load_home_snapshot(user_id):
         if today_event_items:
             daily_message = f"今日は「{today_event_items[0]['title']}」があるね。そこに合わせて無理なく整えよう。"
         elif goal_items:
-            daily_message = f"今日は「{goal_items[0]['title']}」を少しだけ進める日にしよう。"
+            daily_message = "今日は進行中の目標を、ひとつだけ前に進める日にしよう。"
         elif timeline_texts:
             daily_message = "今の流れを見ながら、今日の一歩を一緒に決めよう。"
         else:
