@@ -35,10 +35,18 @@
             {% if chat_threads %}
                 <div class="thread-links">
                     {% for thread in chat_threads %}
-                        <a href="/chat/{{ thread.id }}">
-                            <span>{{ thread.title }}</span>
-                            <small>{{ "日記" if thread.thread_type == "diary" else "自由チャット" }}</small>
-                        </a>
+                        <div class="thread-item">
+                            <a class="thread-link" href="/chat/{{ thread.id }}">
+                                <span>{{ thread.title }}</span>
+                                <small>{{ "日記" if thread.thread_type == "diary" else "自由チャット" }}</small>
+                            </a>
+
+                            {% if thread.thread_type != "diary" %}
+                                <form method="post" action="/chat_threads/{{ thread.id }}/delete">
+                                    <button type="submit" onclick="return confirm('このチャットを削除しますか？')">削除</button>
+                                </form>
+                            {% endif %}
+                        </div>
                     {% endfor %}
                 </div>
             {% else %}

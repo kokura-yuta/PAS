@@ -188,6 +188,21 @@ def create_chat_thread(title):
     finally:
         db.close()
 
+def delete_chat_thread(thread_id):
+    db = SessionLocal()
+
+    try:
+        thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+
+        if thread is None or thread.thread_type == "diary":
+            return
+
+        db.query(ChatMessage).filter(ChatMessage.thread_id == thread_id).delete()
+        db.delete(thread)
+        db.commit()
+    finally:
+        db.close()
+
 def save_message(role, content, thread_id=None):
     db = SessionLocal()
     try:
@@ -690,6 +705,12 @@ def chat_thread_create(title: str = Form("")):
     thread = create_chat_thread(clean_title[:200])
 
     return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
+
+@app.post("/chat_threads/{thread_id}/delete")
+def chat_thread_delete(thread_id: int):
+    delete_chat_thread(thread_id)
+
+    return RedirectResponse(url="/", status_code=303)
 
 @app.get("/memories")
 def memories_page(request: Request):

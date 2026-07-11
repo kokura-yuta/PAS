@@ -137,7 +137,14 @@ body {
     max-width: 560px;
 }
 
-.thread-links a {
+.thread-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.thread-link {
+    flex: 1;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -150,9 +157,22 @@ body {
     text-decoration: none;
 }
 
-.thread-links small {
+.thread-link small {
     color: var(--muted);
     white-space: nowrap;
+}
+
+.thread-item form {
+    margin: 0;
+}
+
+.thread-item button {
+    padding: 10px 12px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
 }
 
 .page {
@@ -405,6 +425,14 @@ body {
 
     .thread-form button {
         width: 100%;
+    }
+
+    .thread-item {
+        align-items: stretch;
+    }
+
+    .thread-item button {
+        height: 100%;
     }
 
     .page {
