@@ -5,6 +5,8 @@
     --subtle: #4b5563;
     --accent: #1f2933;
     --accent-text: #ffffff;
+    --field-bg: rgba(255, 255, 255, 0.82);
+    --field-border: rgba(31, 41, 51, 0.14);
 }
 .theme-calm {
     --bg: #f7f7f4;
@@ -22,6 +24,8 @@
     --subtle: #d1d5db;
     --accent: #e5e7eb;
     --accent-text: #111827;
+    --field-bg: rgba(255, 255, 255, 0.08);
+    --field-border: rgba(255, 255, 255, 0.18);
 }
 
 .theme-forest {
@@ -49,7 +53,8 @@ body {
     color: var(--text);
 }
 
-.home-nav a {
+.home-nav a,
+.button-link {
     display: inline-block;
     margin-right: 12px;
     margin-bottom: 12px;
@@ -89,6 +94,78 @@ body {
 .home-nav {
     margin-top: 32px;
 }
+
+.page {
+    min-height: 100vh;
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 48px 24px;
+    box-sizing: border-box;
+}
+
+.page h1 {
+    margin: 0 0 28px;
+    font-size: 36px;
+}
+
+.page h2 {
+    margin-top: 40px;
+}
+
+.page form {
+    max-width: 560px;
+}
+
+.page label {
+    font-weight: 700;
+}
+
+.page input,
+.page textarea,
+.page select {
+    width: 100%;
+    box-sizing: border-box;
+    margin-top: 8px;
+    padding: 11px 12px;
+    border: 1px solid var(--field-border);
+    border-radius: 8px;
+    background: var(--field-bg);
+    color: var(--text);
+    font: inherit;
+}
+
+.page textarea {
+    min-height: 96px;
+    resize: vertical;
+}
+
+.page button[type="submit"] {
+    padding: 10px 14px;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.page ul {
+    padding-left: 22px;
+    line-height: 1.7;
+}
+
+.page li {
+    margin-bottom: 16px;
+}
+
+.page li form {
+    margin-top: 8px;
+}
+
+.page .button-link {
+    margin-top: 24px;
+}
+
 .chat-page {
     min-height: 100vh;
     max-width: 720px;
@@ -206,12 +283,36 @@ body {
         line-height: 1.7;
     }
 
-    .home-nav a {
+    .home-nav a,
+    .button-link {
         display: block;
         width: 100%;
         box-sizing: border-box;
         margin-right: 0;
         text-align: center;
+    }
+
+    .page {
+        padding: 32px 18px;
+    }
+
+    .page h1 {
+        font-size: 30px;
+        margin-bottom: 24px;
+    }
+
+    .page h2 {
+        font-size: 22px;
+    }
+
+    .page form {
+        max-width: none;
+    }
+
+    .page input,
+    .page textarea,
+    .page select {
+        font-size: 16px;
     }
 
     .chat-page {

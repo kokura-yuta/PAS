@@ -7,60 +7,62 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="theme-{{ settings.theme_name }}">
-    <h1>目標管理</h1>
+    <main class="page">
+        <h1>目標管理</h1>
 
-    <form method="post" action="/goals">
-        <label>目標名</label><br>
-        <input type="text" name="title"><br><br>
+        <form method="post" action="/goals">
+            <label>目標名</label><br>
+            <input type="text" name="title"><br><br>
 
-        <label>説明</label><br>
-        <textarea name="description"></textarea><br><br>
+            <label>説明</label><br>
+            <textarea name="description"></textarea><br><br>
 
-        <label>目標の種類</label><br>
-        <select name="goal_type">
-            <option value="short">身近な目標</option>
-            <option value="big">大きな目標</option>
-        </select><br><br>
+            <label>目標の種類</label><br>
+            <select name="goal_type">
+                <option value="short">身近な目標</option>
+                <option value="big">大きな目標</option>
+            </select><br><br>
 
-        <label>状態</label><br>
-        <select name="status">
-            <option value="active">進行中</option>
-            <option value="completed">達成済み</option>
-            <option value="paused">一時停止</option>
-        </select><br><br>
+            <label>状態</label><br>
+            <select name="status">
+                <option value="active">進行中</option>
+                <option value="completed">達成済み</option>
+                <option value="paused">一時停止</option>
+            </select><br><br>
 
-        <label>優先度</label><br>
-        <select name="priority">
-            <option value="medium">普通</option>
-            <option value="high">高い</option>
-            <option value="low">低い</option>
-        </select><br><br>
+            <label>優先度</label><br>
+            <select name="priority">
+                <option value="medium">普通</option>
+                <option value="high">高い</option>
+                <option value="low">低い</option>
+            </select><br><br>
 
-        <label>期限</label><br>
-        <input type="text" name="deadline" placeholder="例: 2026-07-31"><br><br>
+            <label>期限</label><br>
+            <input type="text" name="deadline" placeholder="例: 2026-07-31"><br><br>
 
-        <button type="submit">目標を保存</button>
-    </form>
+            <button type="submit">目標を保存</button>
+        </form>
 
-    <h2>保存済みの目標</h2>
+        <h2>保存済みの目標</h2>
 
-    {% if goals %}
-        <ul>
-            {% for goal in goals %}
-                <li>
-                    <strong>{{ goal.title }}</strong><br>
-                    種類: {{ goal.goal_type }}<br>
-                    状態: {{ goal.status }}<br>
-                    優先度: {{ goal.priority }}<br>
-                    期限: {{ goal.deadline }}<br>
-                    説明: {{ goal.description }}
-                </li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>まだ目標はありません。</p>
-    {% endif %}
+        {% if goals %}
+            <ul>
+                {% for goal in goals %}
+                    <li>
+                        <strong>{{ goal.title }}</strong><br>
+                        種類: {{ goal.goal_type }}<br>
+                        状態: {{ goal.status }}<br>
+                        優先度: {{ goal.priority }}<br>
+                        期限: {{ goal.deadline }}<br>
+                        説明: {{ goal.description }}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>まだ目標はありません。</p>
+        {% endif %}
 
-    <a href="/">ホームへ戻る</a>
+        <a class="button-link" href="/">ホームへ戻る</a>
+    </main>
 </body>
 </html>

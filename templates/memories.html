@@ -7,25 +7,27 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="theme-{{ settings.theme_name }}">
-    <h1>長期記憶</h1>
+    <main class="page">
+        <h1>長期記憶</h1>
 
-    {% if memories %}
-        <ul>
-            {% for memory in memories %}
-                <li>
-                    <strong>[{{ memory.category }}]</strong>
-                    {{ memory.content }}
+        {% if memories %}
+            <ul>
+                {% for memory in memories %}
+                    <li>
+                        <strong>[{{ memory.category }}]</strong>
+                        {{ memory.content }}
 
-                    <form method="post" action="/memories/{{ memory.id }}/delete">
-                        <button type="submit">削除</button>
-                    </form>
-                </li>
-            {% endfor %}
-        </ul>
-    {% else %}
-        <p>まだ長期記憶はありません。</p>
-    {% endif %}
+                        <form method="post" action="/memories/{{ memory.id }}/delete">
+                            <button type="submit">削除</button>
+                        </form>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>まだ長期記憶はありません。</p>
+        {% endif %}
 
-    <a href="/">ホームへ戻る</a>
+        <a class="button-link" href="/">ホームへ戻る</a>
+    </main>
 </body>
 </html>
