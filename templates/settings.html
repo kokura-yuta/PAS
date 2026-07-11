@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>PAS Settings</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-{{ settings.theme_name }}">
+    <h1>設定</h1>
+
+    <form method="post" action="/settings">
+        <label>基本の性格</label><br>
+        <select name="default_persona">
+            <option value="friend" {% if settings.default_persona == "friend" %}selected{% endif %}>友達</option>
+            <option value="mentor" {% if settings.default_persona == "mentor" %}selected{% endif %}>メンター</option>
+            <option value="strict_teacher" {% if settings.default_persona == "strict_teacher" %}selected{% endif %}>厳しい先生</option>
+            <option value="secretary" {% if settings.default_persona == "secretary" %}selected{% endif %}>秘書</option>
+            <option value="life_coach" {% if settings.default_persona == "life_coach" %}selected{% endif %}>ライフコーチ</option>
+        </select>
+
+        <br><br>
+
+        <label>テーマ</label><br>
+        <select name="theme_name">
+            <option value="calm" {% if settings.theme_name == "calm" %}selected{% endif %}>Calm</option>
+            <option value="deep" {% if settings.theme_name == "deep" %}selected{% endif %}>Deep</option>
+            <option value="forest" {% if settings.theme_name == "forest" %}selected{% endif %}>Forest</option>
+            <option value="warm" {% if settings.theme_name == "warm" %}selected{% endif %}>Warm</option>
+        </select>
+
+        <br><br>
+        <label>返答の長さ</label><br>
+        <select name="response_length">
+            <option value="concise" {% if settings.response_length == "concise" %}selected{% endif %}>短め</option>
+            <option value="balanced" {% if settings.response_length == "balanced" %}selected{% endif %}>普通・臨機応変</option>
+            <option value="detailed" {% if settings.response_length == "detailed" %}selected{% endif %}>詳しめ</option>
+        </select>
+
+        <br><br>
+        <button type="submit">設定を保存</button>
+    </form>
+
+    <a href="/">ホームへ戻る</a>
+</body>
+</html>

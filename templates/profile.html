@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>PAS Profile</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-{{ settings.theme_name }}">
+    <h1>プロフィール</h1>
+
+    <form method="post" action="/profile">
+        <label>名前</label><br>
+        <input type="text" name="name" value="{{ profile.name if profile else '' }}"><br><br>
+
+        <label>学年・立場</label><br>
+        <input type="text" name="school_year" value="{{ profile.school_year if profile else '' }}"><br><br>
+
+        <label>今取り組んでいること</label><br>
+        <textarea name="current_focus">{{ profile.current_focus if profile else '' }}</textarea><br><br>
+
+        <label>人生で向かいたい方向性</label><br>
+        <textarea name="life_direction">{{ profile.life_direction if profile else '' }}</textarea><br><br>
+
+        <label>大切にしている考え方</label><br>
+        <textarea name="values">{{ profile.values if profile else '' }}</textarea><br><br>
+
+        <label>苦手なこと・避けたいこと</label><br>
+        <textarea name="weaknesses">{{ profile.weaknesses if profile else '' }}</textarea><br><br>
+
+        <label>興味があること</label><br>
+        <textarea name="interests">{{ profile.interests if profile else '' }}</textarea><br><br>
+
+        <label>PASにどう接してほしいか</label><br>
+        <textarea name="communication_preference">{{ profile.communication_preference if profile else '' }}</textarea><br><br>
+
+        <label>今までで一番の成功体験</label><br>
+        <textarea name="best_success_experience">{{ profile.best_success_experience if profile else '' }}</textarea><br><br>
+
+        <label>そこまでの道のり</label><br>
+        <textarea name="success_journey">{{ profile.success_journey if profile else '' }}</textarea><br><br>
+
+        <label>その時に感じたこと</label><br>
+        <textarea name="success_feelings">{{ profile.success_feelings if profile else '' }}</textarea><br><br>
+
+        <label>そこから学んだこと</label><br>
+        <textarea name="success_lessons">{{ profile.success_lessons if profile else '' }}</textarea><br><br>
+
+        <button type="submit">保存</button>
+    </form>
+
+    <a href="/">ホームへ戻る</a>
+</body>
+</html>

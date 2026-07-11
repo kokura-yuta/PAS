@@ -3,22 +3,49 @@
 <head>
     <meta charset="UTF-8">
     <title>PAS Chat</title>
+    <link rel="stylesheet" href="/static/style.css">
 </head>
-<body>
-    <h1>PAS Chat</h1>
-    <form method="post" action="/chat">
-        <input type="text" name="message" placeholder="PASに話してみる">
-        <button type="submit">送信</button>
-    </form>
+<body class="theme-{{ settings.theme_name }}">
+    <main class="chat-page">
+        <header class="chat-header">
+            <div>
+                <p class="eyebrow">PAS Chat</p>
+                <h1>PAS</h1>
+            </div>
 
-    {% if message %}
-        <p>あなた: {{ message }}</p>
-    {% endif %}
+            <a href="/settings">性格を変更する</a>
+        </header>
 
-    {% if ai_message %}
-        <p>PAS : {{ ai_message }}</p>
-    {% endif %}
+        <p class="current-persona">
+            現在の性格:
+            <strong>{{ settings.default_persona }}</strong>
+        </p>
 
-    <a href="/">ホームへ戻る</a>
+        <section class="chat-log">
+            {% if chat_items %}
+                {% for chat in chat_items %}
+                    <div class="message {% if chat.role == 'user' %}user-message{% else %}ai-message{% endif %}">
+                        <p>{{ chat.content }}</p>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="message ai-message">
+                    <p>まだ会話はありません。最初のメッセージを送ってみてください。</p>
+                </div>
+            {% endif %}
+        </section>
+
+        <form class="chat-form" method="post" action="/chat">
+            <input type="text" name="message" placeholder="PASに話してみる">
+            <button type="submit">送信</button>
+        </form>
+
+        <a href="/">ホームへ戻る</a>
+    </main>
+    <script>
+        window.addEventListener("load", function () {
+            window.scrollTo(0, document.body.scrollHeight);
+        });
+    </script>
 </body>
 </html>

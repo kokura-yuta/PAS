@@ -1,14 +1,21 @@
 from fastapi import FastAPI, Request, Form
+from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+import json
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime
 from datetime import datetime
 
+
 load_dotenv()
+
+CHAT_HISTORY_LIMIT = 10
+CHAT_DISPLAY_LIMIT = 50
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -29,51 +36,437 @@ class ChatMessage(Base):
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class Memory(Base):
+    __tablename__ = "memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    content = Column(Text)
+    category = Column(String(50))
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Profile(Base):
+    __tablename__ = "profiles"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    name = Column(String(100))
+    school_year = Column(String(100))
+    current_focus = Column(Text)
+    life_direction = Column(Text)
+
+    values = Column(Text)
+    weaknesses = Column(Text)
+    interests = Column(Text)
+    communication_preference = Column(Text)
+
+    best_success_experience = Column(Text)
+    success_journey = Column(Text)
+    success_feelings = Column(Text)
+    success_lessons = Column(Text)
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Goal(Base):
+    __tablename__ = "goals"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    title = Column(String(200))
+    description = Column(Text)
+    goal_type = Column(String(50), default="short")
+    status = Column(String(50), default="active")
+    priority = Column(String(50), default="medium")
+    deadline = Column(String(100))
+
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class Settings(Base):
+    __tablename__ = "settings"
+
+    id = Column(Integer, primary_key=True, index=True)
+
+    default_persona = Column(String(50), default="friend")
+    theme_name = Column(String(50), default="calm")
+    response_length = Column(String(50), default="balanced")
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 Base.metadata.create_all(bind=engine)
 
 def save_message(role, content):
     db = SessionLocal()
+    try:
+        new_message = ChatMessage(
+            role=role,
+            content=content
+        )
 
-    new_message = ChatMessage(
-        role=role,
-        content=content
-    )
+        db.add(new_message)
+        db.commit()
+    finally: 
+        db.close()
 
-    db.add(new_message)
-    db.commit()
-    db.close()
+def save_memory(content, category):
+    db = SessionLocal()
+
+    try:
+        new_memory = Memory(
+            content=content,
+            category=category
+        )
+
+        db.add(new_memory)
+        db.commit()
+    finally:
+        db.close()
+
+def load_memories():
+    db = SessionLocal()
+
+    try:
+        memories = db.query(Memory).order_by(Memory.created_at).all()
+
+        memory_text = ""
+
+        for memory in memories:
+            memory_text += f"[{memory.category}] {memory.content}\n"
+
+        return memory_text
+    finally:
+        db.close()
+
+
+def load_memory_items():
+    db = SessionLocal()
+
+    try:
+        memories = db.query(Memory).order_by(Memory.created_at.desc()).all()
+
+        memory_items = []
+
+        for memory in memories:
+            memory_items.append({
+                "id": memory.id,
+                "category": memory.category,
+                "content": memory.content,
+                "created_at": memory.created_at
+            })
+
+        return memory_items
+    finally:
+        db.close()
+
+def delete_memory(memory_id):
+    db = SessionLocal()
+
+    try:
+        memory = db.query(Memory).filter(Memory.id == memory_id).first()
+
+        if memory:
+            db.delete(memory)
+            db.commit()
+    finally:
+        db.close()
+
+def load_profile():
+    db = SessionLocal()
+
+    try:
+        profile = db.query(Profile).order_by(Profile.created_at.desc()).first()
+
+        return profile
+    finally:
+        db.close()
+
+def save_profile(name, school_year, current_focus, life_direction, values, weaknesses, interests, communication_preference, best_success_experience, success_journey, success_feelings, success_lessons):
+    db = SessionLocal()
+
+    try:
+        profile = db.query(Profile).order_by(Profile.created_at.desc()).first()
+
+        if profile is None:
+            profile = Profile()
+            db.add(profile)
+
+        profile.name = name
+        profile.school_year = school_year
+        profile.current_focus = current_focus
+        profile.life_direction = life_direction
+        profile.values = values
+        profile.weaknesses = weaknesses
+        profile.interests = interests
+        profile.communication_preference = communication_preference
+        profile.best_success_experience = best_success_experience
+        profile.success_journey = success_journey
+        profile.success_feelings = success_feelings
+        profile.success_lessons = success_lessons
+
+        db.commit()
+    finally:
+        db.close()
+
+
+def format_profile_for_prompt(profile):
+    if profile is None:
+        return "プロフィールはまだ登録されていません。"
+
+    return f"""
+名前: {profile.name}
+学年・立場: {profile.school_year}
+今取り組んでいること: {profile.current_focus}
+人生で向かいたい方向性: {profile.life_direction}
+大切にしている考え方: {profile.values}
+苦手なこと・避けたいこと: {profile.weaknesses}
+興味があること: {profile.interests}
+PASにどう接してほしいか: {profile.communication_preference}
+今までで一番の成功体験: {profile.best_success_experience}
+そこまでの道のり: {profile.success_journey}
+その時に感じたこと: {profile.success_feelings}
+そこから学んだこと: {profile.success_lessons}
+"""
+
+def save_goal(title, description, goal_type, status, priority, deadline):
+    db = SessionLocal()
+
+    try:
+        new_goal = Goal(
+            title=title,
+            description=description,
+            goal_type=goal_type,
+            status=status,
+            priority=priority,
+            deadline=deadline
+        )
+
+        db.add(new_goal)
+        db.commit()
+    finally:
+        db.close()
+
+def load_goals():
+    db = SessionLocal()
+
+    try:
+        goals = db.query(Goal).order_by(Goal.created_at.desc()).all()
+
+        return goals
+    finally:
+        db.close()
+
+def load_settings():
+    db = SessionLocal()
+
+    try:
+        settings = db.query(Settings).order_by(Settings.created_at.desc()).first()
+
+        if settings is None:
+            settings = Settings()
+            db.add(settings)
+            db.commit()
+
+        return settings
+    finally:
+        db.close()
+
+def save_settings(default_persona, theme_name, response_length):
+    db = SessionLocal()
+
+    try:
+        settings = db.query(Settings).order_by(Settings.created_at.desc()).first()
+
+        if settings is None:
+            settings = Settings()
+            db.add(settings)
+
+        settings.default_persona = default_persona
+        settings.theme_name = theme_name
+        settings.response_length = response_length
+
+        db.commit()
+    finally:
+        db.close()
+
+def format_goals_for_prompt(goals):
+    if not goals:
+        return "目標はまだ登録されていません。"
+
+    goals_text = ""
+
+    for goal in goals:
+        goals_text += f"""
+目標名: {goal.title}
+種類: {goal.goal_type}
+状態: {goal.status}
+優先度: {goal.priority}
+期限: {goal.deadline}
+説明: {goal.description}
+"""
+
+    return goals_text
 
 def load_messages():
     db = SessionLocal()
 
-    messages = db.query(ChatMessage).order_by(ChatMessage.created_at.desc()).limit(10).all()
+    try:
+        messages = db.query(ChatMessage).order_by(ChatMessage.created_at.desc()).limit(CHAT_HISTORY_LIMIT).all()
 
-    history =""
+        history =""
 
-    for msg in reversed(messages):
-        history += f"{msg.role}: {msg.content}\n"
-    
-    db.close()
+        for msg in reversed(messages):
+            history += f"{msg.role}: {msg.content}\n"
+        
+        return history
+    finally:
+        db.close()
 
-    return history
+def load_chat_items():
+    db = SessionLocal()
+
+    try:
+        messages = (
+            db.query(ChatMessage)
+            .order_by(ChatMessage.created_at.desc())
+            .limit(CHAT_DISPLAY_LIMIT)
+            .all()
+        )
+
+        chat_items = []
+
+        for msg in reversed(messages):
+            chat_items.append({
+                "role": msg.role,
+                "content": msg.content,
+                "created_at": msg.created_at
+            })
+
+        return chat_items
+
+    finally:
+        db.close()
 
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
 
+def extract_memory_from_message(message):
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=f"""
+あなたは、ユーザーの発言から長期記憶に保存すべき情報を抽出するAIです。
+
+保存すべき情報:
+- ユーザーの目標
+- 価値観
+- 性格
+- 好み
+- 重要な出来事
+- 長期的に覚えておくと役立つ情報
+
+保存しなくていい情報:
+- あいさつ
+- 一時的な雑談
+- その場限りの気分
+- 意味の薄い短文
+
+必ず次のJSON形式だけで返してください。
+
+保存する情報がある場合:
+{{
+  "should_save": true,
+  "category": "goal",
+  "content": "ユーザーは..."
+}}
+
+保存する情報がない場合:
+{{
+  "should_save": false,
+  "category": "",
+  "content": ""
+}}
+
+ユーザーの発言:
+{message}
+"""
+    )
+    try:
+        memory_data = json.loads(response.output_text)
+
+    except json.JSONDecodeError:
+        memory_data = {
+            "should_save": False,
+            "category": "",
+            "content": ""
+        }
+    return memory_data
+
+
 PAS_PERSONAS = {
     "friend": """
 あなたはPASです。
-友達のように自然で、相談しやすい口調で返して下さい。
-説教っぽくせずに、相手に寄り添って下さい。
+友達のように自然で、相談しやすい口調で返してください。
+相手の気持ちを受け止め、安心して話せる雰囲気を作ってください。
+アドバイスは押しつけず、やさしく背中を押す形にしてください。
+""",
+    "mentor": """
+あなたはPASです。
+ユーザーの成長を支えるメンターとして返してください。
+感情に寄り添いながらも、学びや改善点を一緒に整理してください。
+次に取るべき行動が見えるように、具体的な提案をしてください。
+""",
+    "strict_teacher": """
+あなたはPASです。
+厳しい先生として、甘やかさずに現実的な視点で返してください。
+言い訳や曖昧な考えがある場合は、はっきり指摘してください。
+ただし人格否定はせず、改善すべき行動・考え方・次の一手を具体的に示してください。
+必要であれば、優しい言葉よりも成長につながる厳しい言葉を優先してください。
+""",
+    "secretary": """
+あなたはPASです。
+秘書として、感情表現よりも整理・要約・優先順位づけを重視して返してください。
+要点、現在の状況、次にやることを簡潔にまとめてください。
+無駄な雑談は控え、実務的で分かりやすい返答にしてください。
+""",
+    "life_coach": """
+あなたはPASです。
+ライフコーチとして、ユーザーの目標・価値観・長期的な成長を踏まえて返してください。
+すぐに答えを押しつけるのではなく、必要に応じて問いを使い、ユーザー自身が気づけるように支援してください。
+感情に寄り添いながら、前に進むための考え方や行動を提案してください。
+"""
+}
+RESPONSE_LENGTH_PROMPTS = {
+    "concise": """
+基本は2〜4文で簡潔に返してください。
+必要な時だけ少し補足してください。
+""",
+    "balanced": """
+相談内容に合わせて、短すぎず長すぎない自然な長さで返してください。
+必要に応じて、要点と次の行動を分かりやすく伝えてください。
+""",
+    "detailed": """
+理由、手順、具体例を含めて、丁寧に詳しく返してください。
+ただし、関係のない説明で長くしすぎないでください
 """
 }
 
-def build_ai_prompt(message, history, persona="friend"):
-    persona_prompt = PAS_PERSONAS[persona]
 
+
+def build_ai_prompt(message, history, memories, profile_text, goals_text, persona="friend", response_length="balanced"):
+    persona_prompt = PAS_PERSONAS.get(persona, PAS_PERSONAS["friend"])
+    length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
     return f"""
 {persona_prompt}
+
+返答の長さ:
+{length_prompt}
+
+プロフィール:
+{profile_text}
+
+目標:
+{goals_text}
+
+長期記憶:
+{memories}
 
 これまでの会話:
 {history}
@@ -84,42 +477,205 @@ def build_ai_prompt(message, history, persona="friend"):
 
 app = FastAPI()
 
+app.mount(
+    "/static",
+    StaticFiles(directory="static"),
+    name="static"
+)
+
 templates = Jinja2Templates(directory="templates")
 
 @app.get("/")
 def home(request: Request):
+    settings = load_settings()
     return templates.TemplateResponse(
         request=request,
         name="home.html",
-        context={}
+        context={
+            "settings": settings
+        }
     )
 
 @app.get("/chat")
 def chat_page(request: Request):
+    settings = load_settings()
+    chat_items = load_chat_items()
     return templates.TemplateResponse(
         request=request,
-        name="chat.html"
+        name="chat.html",
+        context={
+            "settings": settings,
+            "chat_items": chat_items
+        }
     )
+@app.get("/memories")
+def memories_page(request: Request):
+    memories = load_memory_items()
+    settings = load_settings()
+    return templates.TemplateResponse(
+        request=request,
+        name="memories.html",
+        context={
+            "memories": memories,
+            "settings": settings
+        }
+    )
+
+@app.get("/profile")
+def profile_page(request: Request):
+    profile = load_profile()
+    settings = load_settings()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="profile.html",
+        context={
+            "profile": profile,
+            "settings": settings
+        }
+    )
+
+@app.post("/profile")
+def profile_save(
+    request: Request,
+    name: str = Form(""),
+    school_year: str = Form(""),
+    current_focus: str = Form(""),
+    life_direction: str = Form(""),
+    values: str = Form(""),
+    weaknesses: str = Form(""),
+    interests: str = Form(""),
+    communication_preference: str = Form(""),
+    best_success_experience: str = Form(""),
+    success_journey: str = Form(""),
+    success_feelings: str = Form(""),
+    success_lessons: str = Form("")
+):
+    save_profile(
+        name=name,
+        school_year=school_year,
+        current_focus=current_focus,
+        life_direction=life_direction,
+        values=values,
+        weaknesses=weaknesses,
+        interests=interests,
+        communication_preference=communication_preference,
+        best_success_experience=best_success_experience,
+        success_journey=success_journey,
+        success_feelings=success_feelings,
+        success_lessons=success_lessons
+    )
+
+    return RedirectResponse(url="/profile", status_code=303)
+
+@app.get("/goals")
+def goals_page(request: Request):
+    goals = load_goals()
+    settings = load_settings()
+    return templates.TemplateResponse(
+        request=request,
+        name="goals.html",
+        context={
+            "goals": goals,
+            "settings": settings
+        }
+    )
+
+@app.post("/goals")
+def goal_save(
+    title: str = Form(""),
+    description: str = Form(""),
+    goal_type: str = Form("short"),
+    status: str = Form("active"),
+    priority: str = Form("medium"),
+    deadline: str = Form("")
+):
+    save_goal(
+        title=title,
+        description=description,
+        goal_type=goal_type,
+        status=status,
+        priority=priority,
+        deadline=deadline
+    )
+
+    return RedirectResponse(url="/goals", status_code=303)
+
+@app.get("/settings")
+def settings_page(request: Request):
+    settings = load_settings()
+
+    return templates.TemplateResponse(
+        request=request,
+        name="settings.html",
+        context={
+            "settings": settings
+        }
+    )
+
+@app.post("/settings")
+def settings_save(
+    default_persona: str = Form("friend"),
+    theme_name: str = Form("calm"),
+    response_length: str = Form("balanced")
+):
+    save_settings(
+        default_persona=default_persona,
+        theme_name=theme_name,
+        response_length=response_length
+    )
+
+    return RedirectResponse(url="/settings", status_code=303)
+
 @app.post("/chat")
 def chat_send(request: Request, message: str = Form(...)):
     history = load_messages()
+    memories = load_memories()
+    profile = load_profile()
+    profile_text = format_profile_for_prompt(profile)
+    goals = load_goals()
+    goals_text = format_goals_for_prompt(goals)
+    settings = load_settings()
+    persona = settings.default_persona
+    response_length = settings.response_length
 
     save_message("user", message)
+    memory_data = extract_memory_from_message(message)
+
+    should_save_memory = (
+        memory_data.get("should_save")
+        and memory_data.get("content")
+        and memory_data.get("category")
+    )
+
+    if should_save_memory:
+        save_memory(
+            content=memory_data["content"],
+            category=memory_data["category"]
+        )
+
 
     response = client.responses.create(
         model="gpt-4.1-mini",
-        input=build_ai_prompt(message, history)
+        input=build_ai_prompt(message, history, memories, profile_text, goals_text, persona, response_length)
     )
 
     ai_message = response.output_text
 
     save_message("assistant", ai_message)
+    chat_items = load_chat_items()
+
     
     return templates.TemplateResponse(
         request=request,
         name="chat.html",
         context={
-            "message": message,
-            "ai_message": ai_message
+            "chat_items": chat_items,
+            "settings": settings
             }
     )
+
+@app.post("/memories/{memory_id}/delete")
+def delete_memory_action(memory_id: int):
+    delete_memory(memory_id)
+    return RedirectResponse(url="/memories", status_code=303)
