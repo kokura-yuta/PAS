@@ -8,7 +8,7 @@ import os
 import json
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, Integer, String, Text, DateTime
+from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float
 from datetime import datetime
 
 
@@ -54,6 +54,11 @@ class Memory(Base):
     id = Column(Integer, primary_key=True, index=True)
     content = Column(Text)
     category = Column(String(50))
+    importance = Column(Integer, default=3)
+    confidence = Column(Float, default=0.7)
+    source_type = Column(String(50), default="ai_inference")
+    is_active = Column(Boolean, default=True)
+    last_confirmed_at = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
 
 class Profile(Base):
@@ -114,6 +119,28 @@ def ensure_chat_message_thread_id_column():
             connection.execute(text("ALTER TABLE chat_messages ADD COLUMN thread_id INTEGER"))
 
 ensure_chat_message_thread_id_column()
+
+def ensure_memory_metadata_columns():
+    inspector = inspect(engine)
+    columns = inspector.get_columns("memories")
+    column_names = [column["name"] for column in columns]
+
+    memory_columns = {
+        "importance": "INTEGER DEFAULT 3",
+        "confidence": "DOUBLE PRECISION DEFAULT 0.7",
+        "source_type": "VARCHAR(50) DEFAULT 'ai_inference'",
+        "is_active": "BOOLEAN DEFAULT TRUE",
+        "last_confirmed_at": "TIMESTAMP"
+    }
+
+    with engine.begin() as connection:
+        for column_name, column_type in memory_columns.items():
+            if column_name not in column_names:
+                connection.execute(
+                    text(f"ALTER TABLE memories ADD COLUMN {column_name} {column_type}")
+                )
+
+ensure_memory_metadata_columns()
 
 def get_or_create_diary_thread():
     db = SessionLocal()
@@ -224,13 +251,23 @@ def save_message(role, content, thread_id=None):
     finally: 
         db.close()
 
-def save_memory(content, category):
+def save_memory(
+    content,
+    category,
+    importance=3,
+    confidence=0.7,
+    source_type="ai_inference"
+):
     db = SessionLocal()
 
     try:
         new_memory = Memory(
             content=content,
-            category=category
+            category=category,
+            importance=importance,
+            confidence=confidence,
+            source_type=source_type,
+            is_active=True
         )
 
         db.add(new_memory)
@@ -242,12 +279,21 @@ def load_memories():
     db = SessionLocal()
 
     try:
-        memories = db.query(Memory).order_by(Memory.created_at).all()
+        memories = (
+            db.query(Memory)
+            .filter(Memory.is_active.is_(True))
+            .order_by(Memory.created_at)
+            .all()
+        )
 
         memory_text = ""
 
         for memory in memories:
-            memory_text += f"[{memory.category}] {memory.content}\n"
+            memory_text += (
+                f"[{memory.category} / importance:{memory.importance} "
+                f"/ confidence:{memory.confidence} / source:{memory.source_type}] "
+                f"{memory.content}\n"
+            )
 
         return memory_text
     finally:
@@ -267,6 +313,11 @@ def load_memory_items():
                 "id": memory.id,
                 "category": memory.category,
                 "content": memory.content,
+                "importance": memory.importance,
+                "confidence": memory.confidence,
+                "source_type": memory.source_type,
+                "is_active": memory.is_active,
+                "last_confirmed_at": memory.last_confirmed_at,
                 "created_at": memory.created_at
             })
 
@@ -497,15 +548,27 @@ def extract_memory_from_message(message):
 {{
   "should_save": true,
   "category": "goal",
-  "content": "ユーザーは..."
+  "content": "ユーザーは...",
+  "importance": 4,
+  "confidence": 0.9,
+  "source_type": "user_statement"
 }}
 
 保存する情報がない場合:
 {{
   "should_save": false,
   "category": "",
-  "content": ""
+  "content": "",
+  "importance": 0,
+  "confidence": 0,
+  "source_type": ""
 }}
+
+category は goal, value, personality, preference, event, concern, habit の中から選んでください。
+importance は 1〜5 の整数で、長期的に重要なほど高くしてください。
+confidence は 0〜1 の数値で、ユーザーが明言した情報ほど高くしてください。
+source_type は user_statement または ai_inference にしてください。
+ユーザーがはっきり言った事実は user_statement、文脈からの推測は ai_inference にしてください。
 
 ユーザーの発言:
 {message}
@@ -518,7 +581,10 @@ def extract_memory_from_message(message):
         memory_data = {
             "should_save": False,
             "category": "",
-            "content": ""
+            "content": "",
+            "importance": 0,
+            "confidence": 0,
+            "source_type": ""
         }
     return memory_data
 
@@ -858,7 +924,10 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     memory_data = {
         "should_save": False,
         "category": "",
-        "content": ""
+        "content": "",
+        "importance": 0,
+        "confidence": 0,
+        "source_type": ""
     }
 
     if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
@@ -873,7 +942,10 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     if should_save_memory:
         save_memory(
             content=memory_data["content"],
-            category=memory_data["category"]
+            category=memory_data["category"],
+            importance=memory_data.get("importance", 3),
+            confidence=memory_data.get("confidence", 0.7),
+            source_type=memory_data.get("source_type", "ai_inference")
         )
 
 

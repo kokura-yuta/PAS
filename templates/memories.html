@@ -16,6 +16,12 @@
                     <li>
                         <strong>[{{ memory.category }}]</strong>
                         {{ memory.content }}
+                        <br>
+                        <small>
+                            重要度: {{ memory.importance }}
+                            / 確信度: {{ memory.confidence }}
+                            / 情報源: {{ memory.source_type }}
+                        </small>
 
                         <form method="post" action="/memories/{{ memory.id }}/delete">
                             <button type="submit">削除</button>
