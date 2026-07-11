@@ -10,42 +10,82 @@
     <main class="page">
         <h1>プロフィール</h1>
 
-        <form method="post" action="/profile">
-            <label>名前</label><br>
-            <input type="text" name="name" value="{{ profile.name if profile else '' }}"><br><br>
+        <form class="profile-form" method="post" action="/profile">
+            <section class="form-section">
+                <h2>基本情報</h2>
 
-            <label>学年・立場</label><br>
-            <input type="text" name="school_year" value="{{ profile.school_year if profile else '' }}"><br><br>
+                <div class="field">
+                    <label>名前</label>
+                    <input type="text" name="name" value="{{ profile.name if profile else '' }}">
+                </div>
 
-            <label>今取り組んでいること</label><br>
-            <textarea name="current_focus">{{ profile.current_focus if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>学年・立場</label>
+                    <input type="text" name="school_year" value="{{ profile.school_year if profile else '' }}">
+                </div>
+            </section>
 
-            <label>人生で向かいたい方向性</label><br>
-            <textarea name="life_direction">{{ profile.life_direction if profile else '' }}</textarea><br><br>
+            <section class="form-section">
+                <h2>現在</h2>
 
-            <label>大切にしている考え方</label><br>
-            <textarea name="values">{{ profile.values if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>今取り組んでいること</label>
+                    <textarea name="current_focus">{{ profile.current_focus if profile else '' }}</textarea>
+                </div>
 
-            <label>苦手なこと・避けたいこと</label><br>
-            <textarea name="weaknesses">{{ profile.weaknesses if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>人生で向かいたい方向性</label>
+                    <textarea name="life_direction">{{ profile.life_direction if profile else '' }}</textarea>
+                </div>
+            </section>
 
-            <label>興味があること</label><br>
-            <textarea name="interests">{{ profile.interests if profile else '' }}</textarea><br><br>
+            <section class="form-section">
+                <h2>価値観</h2>
 
-            <label>PASにどう接してほしいか</label><br>
-            <textarea name="communication_preference">{{ profile.communication_preference if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>大切にしている考え方</label>
+                    <textarea name="values">{{ profile.values if profile else '' }}</textarea>
+                </div>
 
-            <label>今までで一番の成功体験</label><br>
-            <textarea name="best_success_experience">{{ profile.best_success_experience if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>苦手なこと・避けたいこと</label>
+                    <textarea name="weaknesses">{{ profile.weaknesses if profile else '' }}</textarea>
+                </div>
 
-            <label>そこまでの道のり</label><br>
-            <textarea name="success_journey">{{ profile.success_journey if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>興味があること</label>
+                    <textarea name="interests">{{ profile.interests if profile else '' }}</textarea>
+                </div>
 
-            <label>その時に感じたこと</label><br>
-            <textarea name="success_feelings">{{ profile.success_feelings if profile else '' }}</textarea><br><br>
+                <div class="field">
+                    <label>PASにどう接してほしいか</label>
+                    <textarea name="communication_preference">{{ profile.communication_preference if profile else '' }}</textarea>
+                </div>
+            </section>
 
-            <label>そこから学んだこと</label><br>
-            <textarea name="success_lessons">{{ profile.success_lessons if profile else '' }}</textarea><br><br>
+            <section class="form-section">
+                <h2>成功体験</h2>
+
+                <div class="field">
+                    <label>今までで一番の成功体験</label>
+                    <textarea name="best_success_experience">{{ profile.best_success_experience if profile else '' }}</textarea>
+                </div>
+
+                <div class="field">
+                    <label>そこまでの道のり</label>
+                    <textarea name="success_journey">{{ profile.success_journey if profile else '' }}</textarea>
+                </div>
+
+                <div class="field">
+                    <label>その時に感じたこと</label>
+                    <textarea name="success_feelings">{{ profile.success_feelings if profile else '' }}</textarea>
+                </div>
+
+                <div class="field">
+                    <label>そこから学んだこと</label>
+                    <textarea name="success_lessons">{{ profile.success_lessons if profile else '' }}</textarea>
+                </div>
+            </section>
 
             <button type="submit">保存</button>
         </form>

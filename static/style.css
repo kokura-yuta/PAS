@@ -118,7 +118,39 @@ body {
     margin: 0 auto;
 }
 
+.profile-form {
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+}
+
+.form-section {
+    border-top: 1px solid var(--field-border);
+    padding-top: 24px;
+}
+
+.form-section:first-child {
+    border-top: none;
+    padding-top: 0;
+}
+
+.form-section h2 {
+    max-width: none;
+    margin: 0 0 18px;
+    font-size: 20px;
+}
+
+.field {
+    margin-bottom: 18px;
+}
+
+.field:last-child {
+    margin-bottom: 0;
+}
+
 .page label {
+    display: block;
+    margin-bottom: 8px;
     font-weight: 700;
 }
 
@@ -127,7 +159,6 @@ body {
 .page select {
     width: 100%;
     box-sizing: border-box;
-    margin-top: 8px;
     padding: 11px 12px;
     border: 1px solid var(--field-border);
     border-radius: 8px;
