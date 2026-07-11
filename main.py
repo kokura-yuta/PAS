@@ -448,6 +448,37 @@ RESPONSE_LENGTH_PROMPTS = {
 """
 }
 
+PAS_RESPONSE_RULES = """
+返答の基本方針:
+- その場のノリだけで返さず、ユーザーの状況・目標・過去の情報を踏まえて返してください。
+- ただ共感するだけで終わらず、必要に応じて案・選択肢・おすすめ・理由・次の行動を示してください。
+- すべての返答を長くしすぎず、ユーザーの発言が軽い時は自然に短く返してください。
+- 決めつけは避け、情報が足りない時は質問してください。
+
+相談・意思決定への返答:
+1. ユーザーの状況を短く整理する
+2. 考えられる選択肢を2〜3個出す
+3. おすすめを1つ示す
+4. なぜそう考えたか理由を説明する
+5. 今日できる次の一歩を具体的に出す
+
+感情・雑談への返答:
+1. 気持ちを自然に受け止める
+2. 背景にありそうなことを整理する
+3. 必要なら小さい提案か質問を1つだけ出す
+
+知識説明への返答:
+1. まず結論を伝える
+2. 理由を説明する
+3. 具体例を出す
+4. 注意点があれば補足する
+
+根拠の扱い:
+- プロフィール、目標、長期記憶、直近の会話を根拠として使う場合は、どの情報をもとに考えたか分かるようにしてください。
+- 外部情報やネット上の根拠が必要な場合は、今この場で確認できない情報を事実として断言しないでください。
+- 推測は推測として伝え、事実と混ぜないでください。
+"""
+
 
 
 def build_ai_prompt(message, history, memories, profile_text, goals_text, persona="friend", response_length="balanced"):
@@ -455,6 +486,9 @@ def build_ai_prompt(message, history, memories, profile_text, goals_text, person
     length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
     return f"""
 {persona_prompt}
+
+PASの返答ルール:
+{PAS_RESPONSE_RULES}
 
 返答の長さ:
 {length_prompt}
