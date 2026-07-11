@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAS Timeline</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-{{ settings.theme_name }}">
+    <main class="page">
+        <h1>Timeline Memory</h1>
+
+        <form method="post" action="/timeline">
+            <label>内容</label>
+            <textarea name="content" placeholder="例: Skyインターンに参加予定"></textarea>
+
+            <label>時間の種類</label>
+            <select name="temporal_type">
+                <option value="future">未来</option>
+                <option value="present">現在</option>
+                <option value="past">過去</option>
+            </select>
+
+            <label>日付</label>
+            <input type="date" name="event_date">
+
+            <label>感情</label>
+            <input type="text" name="emotion" placeholder="例: 不安、楽しみ、達成感">
+
+            <label>感情の強さ</label>
+            <select name="emotion_intensity">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+            </select>
+
+            <label>場所</label>
+            <input type="text" name="location">
+
+            <label>関連人物</label>
+            <input type="text" name="related_people">
+
+            <label>重要度</label>
+            <select name="importance">
+                <option value="1">1</option>
+                <option value="2">2</option>
+                <option value="3" selected>3</option>
+                <option value="4">4</option>
+                <option value="5">5</option>
+            </select>
+
+            <button type="submit">Timelineに保存</button>
+        </form>
+
+        <h2>保存済みTimeline</h2>
+
+        {% if timeline_items %}
+            <ul class="memory-list">
+                {% for item in timeline_items %}
+                    <li>
+                        <strong>[{{ item.temporal_label }}]</strong>
+                        {{ item.content }}
+                        <br>
+                        <small>
+                            日付: {{ item.event_date_text }}
+                            / 感情: {{ item.emotion }}
+                            / 重要度: {{ item.importance }}
+                            / 情報源: {{ item.source_label }}
+                        </small>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>まだTimeline Memoryはありません。</p>
+        {% endif %}
+
+        <a class="back-link" href="/">ホームへ戻る</a>
+    </main>
+</body>
+</html>

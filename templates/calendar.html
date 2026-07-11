@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAS Calendar</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-{{ settings.theme_name }}">
+    <main class="page">
+        <h1>Calendar</h1>
+
+        {% if message %}
+            <p class="notice">{{ message }}</p>
+        {% endif %}
+
+        {% if not calendar_ready %}
+            <p>
+                Google Calendar連携の環境変数がまだ設定されていません。
+                Renderに GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / GOOGLE_REDIRECT_URI を追加すると接続できます。
+            </p>
+        {% elif not calendar_connected %}
+            <a class="action-link" href="/calendar/connect">Google Calendarと接続する</a>
+        {% else %}
+            <form method="post" action="/calendar/sync">
+                <button type="submit">Google Calendarを同期</button>
+            </form>
+
+            <h2>予定を作成</h2>
+
+            <form method="post" action="/calendar/events">
+                <label>予定名</label>
+                <input type="text" name="title" required>
+
+                <label>説明</label>
+                <textarea name="description"></textarea>
+
+                <label>開始日時</label>
+                <input type="datetime-local" name="start_datetime" required>
+
+                <label>終了日時</label>
+                <input type="datetime-local" name="end_datetime" required>
+
+                <label>場所</label>
+                <input type="text" name="location">
+
+                <button type="submit">予定を作成</button>
+            </form>
+        {% endif %}
+
+        <h2>取得済みの予定</h2>
+
+        {% if calendar_items %}
+            <ul class="memory-list">
+                {% for event in calendar_items %}
+                    <li>
+                        <strong>{{ event.title }}</strong>
+                        <br>
+                        <small>
+                            {{ event.start_text }} - {{ event.end_text }}
+                            {% if event.location %}
+                                / {{ event.location }}
+                            {% endif %}
+                        </small>
+
+                        {% if event.description %}
+                            <p>{{ event.description }}</p>
+                        {% endif %}
+
+                        <form method="post" action="/calendar/events/{{ event.id }}/delete">
+                            <button type="submit" onclick="return confirm('この予定を削除しますか？')">削除</button>
+                        </form>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p>まだ予定はありません。</p>
+        {% endif %}
+
+        <a class="back-link" href="/">ホームへ戻る</a>
+    </main>
+</body>
+</html>

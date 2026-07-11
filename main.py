@@ -9,11 +9,25 @@ import os
 import json
 import hashlib
 import secrets
+from urllib.parse import quote
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime
+from datetime import datetime, timedelta
+
+try:
+    from google.oauth2.credentials import Credentials
+    from google_auth_oauthlib.flow import Flow
+    from google.auth.transport.requests import Request as GoogleAuthRequest
+    from googleapiclient.discovery import build
+    from googleapiclient.errors import HttpError
+except ImportError:
+    Credentials = None
+    Flow = None
+    GoogleAuthRequest = None
+    build = None
+    HttpError = Exception
 
 
 load_dotenv()
@@ -23,8 +37,20 @@ CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
 THREAD_TITLE_MAX_LENGTH = 50
 PASSWORD_MIN_LENGTH = 8
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
+GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
+GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
+CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
+TIMELINE_LABELS = {
+    "past": "過去",
+    "present": "現在",
+    "future": "未来"
+}
 THREAD_TYPE_LABELS = {
     DIARY_THREAD_TYPE: "日記",
     CUSTOM_THREAD_TYPE: "自由チャット"
@@ -166,6 +192,52 @@ class Settings(Base):
     response_length = Column(String(50), default="balanced")
     created_at = Column(DateTime, default=datetime.utcnow)
 
+
+class TimelineMemory(Base):
+    __tablename__ = "timeline_memories"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    content = Column(Text)
+    temporal_type = Column(String(50))
+    event_date = Column(DateTime)
+    emotion = Column(String(100))
+    emotion_intensity = Column(Integer, default=3)
+    location = Column(String(200))
+    related_people = Column(Text)
+    importance = Column(Integer, default=3)
+    confidence = Column(Float, default=0.7)
+    source_type = Column(String(50), default="user_statement")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CalendarAccount(Base):
+    __tablename__ = "calendar_accounts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    provider = Column(String(50), default="google")
+    token_json = Column(Text)
+    is_connected = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    google_event_id = Column(String(255), index=True)
+    title = Column(String(255))
+    description = Column(Text)
+    start_datetime = Column(DateTime)
+    end_datetime = Column(DateTime)
+    location = Column(String(255))
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 Base.metadata.create_all(bind=engine)
 
 def ensure_columns(table_name, column_definitions):
@@ -206,7 +278,10 @@ def ensure_user_id_columns():
         "memories",
         "profiles",
         "goals",
-        "settings"
+        "settings",
+        "timeline_memories",
+        "calendar_accounts",
+        "calendar_events"
     ]
 
     for table_name in user_tables:
@@ -325,7 +400,10 @@ def claim_unowned_data(user_id):
         "memories",
         "profiles",
         "goals",
-        "settings"
+        "settings",
+        "timeline_memories",
+        "calendar_accounts",
+        "calendar_events"
     ]
 
     with engine.begin() as connection:
@@ -945,6 +1023,396 @@ def load_chat_items(thread_id=None, user_id=None):
     finally:
         db.close()
 
+
+def parse_datetime_value(value):
+    value = (value or "").strip()
+
+    if not value:
+        return None
+
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        try:
+            return datetime.strptime(value, "%Y-%m-%d")
+        except ValueError:
+            return None
+
+
+def get_timeline_label(temporal_type):
+    return TIMELINE_LABELS.get(temporal_type, "未分類")
+
+
+def save_timeline_memory(
+    user_id,
+    content,
+    temporal_type,
+    event_date,
+    emotion,
+    emotion_intensity,
+    location,
+    related_people,
+    importance,
+    confidence,
+    source_type="user_statement"
+):
+    content = (content or "").strip()
+
+    if not content:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        timeline_memory = TimelineMemory(
+            user_id=user_id,
+            content=content,
+            temporal_type=temporal_type,
+            event_date=parse_datetime_value(event_date),
+            emotion=(emotion or "").strip(),
+            emotion_intensity=normalize_importance(emotion_intensity),
+            location=(location or "").strip(),
+            related_people=(related_people or "").strip(),
+            importance=normalize_importance(importance),
+            confidence=normalize_confidence(confidence),
+            source_type=normalize_source_type(source_type)
+        )
+
+        db.add(timeline_memory)
+        db.commit()
+        return timeline_memory.id
+    finally:
+        db.close()
+
+
+def load_timeline_items(user_id):
+    db = SessionLocal()
+
+    try:
+        items = (
+            db.query(TimelineMemory)
+            .filter(TimelineMemory.user_id == user_id)
+            .order_by(TimelineMemory.event_date.desc().nullslast(), TimelineMemory.created_at.desc())
+            .all()
+        )
+
+        timeline_items = []
+
+        for item in items:
+            timeline_items.append({
+                "id": item.id,
+                "content": item.content,
+                "temporal_type": item.temporal_type,
+                "temporal_label": get_timeline_label(item.temporal_type),
+                "event_date_text": format_date(item.event_date),
+                "emotion": item.emotion,
+                "emotion_intensity": item.emotion_intensity,
+                "location": item.location,
+                "related_people": item.related_people,
+                "importance": normalize_importance(item.importance),
+                "confidence": normalize_confidence(item.confidence),
+                "source_label": format_source_label(item.source_type)
+            })
+
+        return timeline_items
+    finally:
+        db.close()
+
+
+def format_timeline_for_prompt(timeline_items):
+    if not timeline_items:
+        return "Timeline Memoryはまだ登録されていません。"
+
+    timeline_text = ""
+
+    for item in timeline_items[:20]:
+        timeline_text += (
+            f"[{item['temporal_label']} / date:{item['event_date_text']} "
+            f"/ emotion:{item['emotion']} / importance:{item['importance']}] "
+            f"{item['content']}\n"
+        )
+
+    return timeline_text
+
+
+def calendar_config_ready():
+    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and Flow and Credentials and build)
+
+
+def get_calendar_redirect_uri(request):
+    if GOOGLE_REDIRECT_URI:
+        return GOOGLE_REDIRECT_URI
+
+    return str(request.url_for("google_calendar_callback"))
+
+
+def build_google_calendar_flow(request):
+    if not calendar_config_ready():
+        return None
+
+    client_config = {
+        "web": {
+            "client_id": GOOGLE_CLIENT_ID,
+            "client_secret": GOOGLE_CLIENT_SECRET,
+            "auth_uri": GOOGLE_AUTH_URI,
+            "token_uri": GOOGLE_TOKEN_URI,
+            "redirect_uris": [get_calendar_redirect_uri(request)]
+        }
+    }
+
+    flow = Flow.from_client_config(
+        client_config,
+        scopes=CALENDAR_SCOPES,
+        redirect_uri=get_calendar_redirect_uri(request)
+    )
+
+    return flow
+
+
+def load_calendar_account(user_id):
+    db = SessionLocal()
+
+    try:
+        return (
+            db.query(CalendarAccount)
+            .filter(CalendarAccount.user_id == user_id)
+            .filter(CalendarAccount.provider == "google")
+            .filter(CalendarAccount.is_connected.is_(True))
+            .first()
+        )
+    finally:
+        db.close()
+
+
+def save_calendar_credentials(user_id, credentials):
+    db = SessionLocal()
+
+    try:
+        account = (
+            db.query(CalendarAccount)
+            .filter(CalendarAccount.user_id == user_id)
+            .filter(CalendarAccount.provider == "google")
+            .first()
+        )
+
+        if account is None:
+            account = CalendarAccount(user_id=user_id, provider="google")
+            db.add(account)
+
+        account.token_json = credentials.to_json()
+        account.is_connected = True
+        account.updated_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+
+def build_calendar_service(user_id):
+    account = load_calendar_account(user_id)
+
+    if not calendar_config_ready():
+        return None, "Google Calendar連携の環境変数またはライブラリが未設定です。"
+
+    if account is None or not account.token_json:
+        return None, "Google Calendarがまだ接続されていません。"
+
+    credentials = Credentials.from_authorized_user_info(
+        json.loads(account.token_json),
+        CALENDAR_SCOPES
+    )
+
+    if credentials.expired and credentials.refresh_token:
+        credentials.refresh(GoogleAuthRequest())
+        save_calendar_credentials(user_id, credentials)
+
+    if not credentials.valid:
+        return None, "Google Calendarの認証が切れています。もう一度接続してください。"
+
+    return build("calendar", "v3", credentials=credentials), ""
+
+
+def upsert_calendar_event(user_id, event):
+    google_event_id = event.get("id")
+
+    if not google_event_id:
+        return
+
+    start_value = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
+    end_value = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
+
+    db = SessionLocal()
+
+    try:
+        calendar_event = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.google_event_id == google_event_id)
+            .first()
+        )
+
+        if calendar_event is None:
+            calendar_event = CalendarEvent(
+                user_id=user_id,
+                google_event_id=google_event_id
+            )
+            db.add(calendar_event)
+
+        calendar_event.title = event.get("summary", "無題の予定")
+        calendar_event.description = event.get("description", "")
+        calendar_event.start_datetime = parse_datetime_value(start_value)
+        calendar_event.end_datetime = parse_datetime_value(end_value)
+        calendar_event.location = event.get("location", "")
+        calendar_event.updated_at = datetime.utcnow()
+        db.commit()
+    finally:
+        db.close()
+
+
+def sync_google_calendar_events(user_id):
+    service, error = build_calendar_service(user_id)
+
+    if error:
+        return False, error
+
+    now = datetime.utcnow()
+    time_min = now.isoformat() + "Z"
+    time_max = (now + timedelta(days=90)).isoformat() + "Z"
+
+    try:
+        events_result = service.events().list(
+            calendarId="primary",
+            timeMin=time_min,
+            timeMax=time_max,
+            maxResults=100,
+            singleEvents=True,
+            orderBy="startTime"
+        ).execute()
+    except HttpError:
+        return False, "Google Calendarの予定取得に失敗しました。"
+
+    events = events_result.get("items", [])
+
+    for event in events:
+        upsert_calendar_event(user_id, event)
+
+    return True, f"{len(events)}件の予定を同期しました。"
+
+
+def create_google_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
+    title = (title or "").strip()
+    start_datetime = (start_datetime or "").strip()
+    end_datetime = (end_datetime or "").strip()
+
+    if not title or not start_datetime or not end_datetime:
+        return False, "予定名、開始日時、終了日時を入力してください。"
+
+    service, error = build_calendar_service(user_id)
+
+    if error:
+        return False, error
+
+    event_body = {
+        "summary": title,
+        "description": description,
+        "location": location,
+        "start": {
+            "dateTime": start_datetime,
+            "timeZone": APP_TIMEZONE
+        },
+        "end": {
+            "dateTime": end_datetime,
+            "timeZone": APP_TIMEZONE
+        }
+    }
+
+    try:
+        created_event = service.events().insert(
+            calendarId="primary",
+            body=event_body
+        ).execute()
+    except HttpError:
+        return False, "Google Calendarへの予定作成に失敗しました。"
+
+    upsert_calendar_event(user_id, created_event)
+    return True, "予定を作成しました。"
+
+
+def delete_google_calendar_event(user_id, calendar_event_id):
+    db = SessionLocal()
+
+    try:
+        calendar_event = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.id == calendar_event_id)
+            .first()
+        )
+
+        if calendar_event is None:
+            return False, "予定が見つかりません。"
+
+        google_event_id = calendar_event.google_event_id
+        service, error = build_calendar_service(user_id)
+
+        if not error and google_event_id:
+            try:
+                service.events().delete(
+                    calendarId="primary",
+                    eventId=google_event_id
+                ).execute()
+            except HttpError:
+                return False, "Google Calendarの予定削除に失敗しました。"
+
+        db.delete(calendar_event)
+        db.commit()
+        return True, "予定を削除しました。"
+    finally:
+        db.close()
+
+
+def load_calendar_events(user_id):
+    db = SessionLocal()
+
+    try:
+        events = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .order_by(CalendarEvent.start_datetime.asc().nullslast())
+            .all()
+        )
+
+        calendar_items = []
+
+        for event in events:
+            calendar_items.append({
+                "id": event.id,
+                "title": event.title,
+                "description": event.description,
+                "start_text": format_datetime(event.start_datetime),
+                "end_text": format_datetime(event.end_datetime),
+                "location": event.location
+            })
+
+        return calendar_items
+    finally:
+        db.close()
+
+
+def format_calendar_for_prompt(calendar_items):
+    if not calendar_items:
+        return "Google Calendarの予定はまだ取得されていません。"
+
+    calendar_text = ""
+
+    for event in calendar_items[:20]:
+        calendar_text += (
+            f"{event['start_text']} - {event['end_text']}: "
+            f"{event['title']} 場所:{event['location']}\n"
+        )
+
+    return calendar_text
+
+
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
@@ -1119,6 +1587,8 @@ def build_ai_prompt(
     message,
     history,
     memories,
+    timeline_text,
+    calendar_text,
     profile_text,
     goals_text,
     persona="friend",
@@ -1149,6 +1619,12 @@ PASの返答ルール:
 
 長期記憶:
 {memories}
+
+Timeline Memory:
+{timeline_text}
+
+Google Calendar予定:
+{calendar_text}
 
 これまでの会話:
 {history}
@@ -1484,6 +1960,186 @@ def goal_save(
 
     return RedirectResponse(url="/goals", status_code=303)
 
+
+@app.get("/timeline")
+def timeline_page(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
+    timeline_items = load_timeline_items(current_user.id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="timeline.html",
+        context={
+            "settings": settings,
+            "timeline_items": timeline_items
+        }
+    )
+
+
+@app.post("/timeline")
+def timeline_save(
+    request: Request,
+    content: str = Form(""),
+    temporal_type: str = Form("present"),
+    event_date: str = Form(""),
+    emotion: str = Form(""),
+    emotion_intensity: int = Form(3),
+    location: str = Form(""),
+    related_people: str = Form(""),
+    importance: int = Form(3),
+    confidence: float = Form(0.8)
+):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    save_timeline_memory(
+        user_id=current_user.id,
+        content=content,
+        temporal_type=temporal_type,
+        event_date=event_date,
+        emotion=emotion,
+        emotion_intensity=emotion_intensity,
+        location=location,
+        related_people=related_people,
+        importance=importance,
+        confidence=confidence
+    )
+
+    return RedirectResponse(url="/timeline", status_code=303)
+
+
+@app.get("/calendar")
+def calendar_page(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
+    calendar_account = load_calendar_account(current_user.id)
+    calendar_items = load_calendar_events(current_user.id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="calendar.html",
+        context={
+            "settings": settings,
+            "calendar_ready": calendar_config_ready(),
+            "calendar_connected": calendar_account is not None,
+            "calendar_items": calendar_items,
+            "message": request.query_params.get("message", "")
+        }
+    )
+
+
+@app.get("/calendar/connect")
+def google_calendar_connect(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    flow = build_google_calendar_flow(request)
+
+    if flow is None:
+        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar設定が未完了です')}", status_code=303)
+
+    state = secrets.token_urlsafe(24)
+    request.session["google_calendar_oauth_state"] = state
+    authorization_url, _ = flow.authorization_url(
+        access_type="offline",
+        include_granted_scopes="true",
+        prompt="consent",
+        state=state
+    )
+
+    return RedirectResponse(url=authorization_url, status_code=303)
+
+
+@app.get("/calendar/callback")
+def google_calendar_callback(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    expected_state = request.session.get("google_calendar_oauth_state")
+    received_state = request.query_params.get("state")
+
+    if not expected_state or expected_state != received_state:
+        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar接続の確認に失敗しました')}", status_code=303)
+
+    flow = build_google_calendar_flow(request)
+
+    if flow is None:
+        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar設定が未完了です')}", status_code=303)
+
+    try:
+        flow.fetch_token(authorization_response=str(request.url))
+    except Exception:
+        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar接続に失敗しました')}", status_code=303)
+
+    save_calendar_credentials(current_user.id, flow.credentials)
+    sync_google_calendar_events(current_user.id)
+
+    return RedirectResponse(url=f"/calendar?message={quote('Google Calendarを接続しました')}", status_code=303)
+
+
+@app.post("/calendar/sync")
+def calendar_sync(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    _, message = sync_google_calendar_events(current_user.id)
+    return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
+
+
+@app.post("/calendar/events")
+def calendar_event_create(
+    request: Request,
+    title: str = Form(""),
+    description: str = Form(""),
+    start_datetime: str = Form(""),
+    end_datetime: str = Form(""),
+    location: str = Form("")
+):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    _, message = create_google_calendar_event(
+        user_id=current_user.id,
+        title=title,
+        description=description,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        location=location
+    )
+
+    return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
+
+
+@app.post("/calendar/events/{calendar_event_id}/delete")
+def calendar_event_delete(request: Request, calendar_event_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    _, message = delete_google_calendar_event(current_user.id, calendar_event_id)
+    return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
+
+
 @app.get("/settings")
 def settings_page(request: Request):
     current_user = get_current_user(request)
@@ -1541,6 +2197,10 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
 
     history = load_messages(thread_id, current_user.id)
     memories = load_memories(current_user.id)
+    timeline_items = load_timeline_items(current_user.id)
+    timeline_text = format_timeline_for_prompt(timeline_items)
+    calendar_items = load_calendar_events(current_user.id)
+    calendar_text = format_calendar_for_prompt(calendar_items)
     profile = load_profile(current_user.id)
     profile_text = format_profile_for_prompt(profile)
     goals = load_goals(current_user.id)
@@ -1600,6 +2260,8 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
                 clean_message,
                 history,
                 memories,
+                timeline_text,
+                calendar_text,
                 profile_text,
                 goals_text,
                 persona,
