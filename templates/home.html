@@ -14,6 +14,12 @@
             <p class="lead">
                 一人ひとりを長期的に理解し、人生に寄り添うAIパートナー。
             </p>
+            <div class="account-bar">
+                <span>{{ current_user.name }}でログイン中</span>
+                <form method="post" action="/logout">
+                    <button type="submit">ログアウト</button>
+                </form>
+            </div>
         </section>
 
         <nav class="home-nav">

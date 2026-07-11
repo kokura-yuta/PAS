@@ -2,13 +2,17 @@ from fastapi import FastAPI, Request, Form
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
 import json
+import hashlib
+import secrets
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float
+from sqlalchemy.exc import IntegrityError
 from datetime import datetime
 
 
@@ -18,6 +22,7 @@ CHAT_HISTORY_LIMIT = 10
 CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
 THREAD_TITLE_MAX_LENGTH = 50
+PASSWORD_MIN_LENGTH = 8
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 THREAD_TYPE_LABELS = {
@@ -57,6 +62,7 @@ def get_thread_description(thread_type):
     return "テーマごとにPASと話せる自由チャットです。相談、整理、アイデア出しに使えます。"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "dev-session-secret-change-me")
 engine = create_engine(DATABASE_URL)
 
 Base = declarative_base()
@@ -67,10 +73,20 @@ SessionLocal = sessionmaker(
     bind=engine
 )
 
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(100))
+    email = Column(String(255), unique=True, index=True)
+    password_hash = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class ChatMessage(Base):
     __tablename__="chat_messages"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
     thread_id = Column(Integer, index=True)
     role = Column(String(20))
     content = Column(Text)
@@ -80,6 +96,7 @@ class ChatThread(Base):
     __tablename__ = "chat_threads"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
     title = Column(String(200))
     thread_type = Column(String(50), default="custom")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -90,6 +107,7 @@ class Memory(Base):
     __tablename__ = "memories"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
     content = Column(Text)
     category = Column(String(50))
     importance = Column(Integer, default=3)
@@ -103,6 +121,7 @@ class Profile(Base):
     __tablename__ = "profiles"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
 
     name = Column(String(100))
     school_year = Column(String(100))
@@ -125,6 +144,7 @@ class Goal(Base):
     __tablename__ = "goals"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
 
     title = Column(String(200))
     description = Column(Text)
@@ -139,6 +159,7 @@ class Settings(Base):
     __tablename__ = "settings"
 
     id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
 
     default_persona = Column(String(50), default="friend")
     theme_name = Column(String(50), default="calm")
@@ -147,22 +168,25 @@ class Settings(Base):
 
 Base.metadata.create_all(bind=engine)
 
-def ensure_chat_message_thread_id_column():
+def ensure_columns(table_name, column_definitions):
     inspector = inspect(engine)
-    columns = inspector.get_columns("chat_messages")
+    columns = inspector.get_columns(table_name)
     column_names = [column["name"] for column in columns]
 
-    if "thread_id" not in column_names:
-        with engine.begin() as connection:
-            connection.execute(text("ALTER TABLE chat_messages ADD COLUMN thread_id INTEGER"))
+    with engine.begin() as connection:
+        for column_name, column_type in column_definitions.items():
+            if column_name not in column_names:
+                connection.execute(
+                    text(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+                )
+
+
+def ensure_chat_message_thread_id_column():
+    ensure_columns("chat_messages", {"thread_id": "INTEGER"})
 
 ensure_chat_message_thread_id_column()
 
 def ensure_memory_metadata_columns():
-    inspector = inspect(engine)
-    columns = inspector.get_columns("memories")
-    column_names = [column["name"] for column in columns]
-
     memory_columns = {
         "importance": "INTEGER DEFAULT 3",
         "confidence": "DOUBLE PRECISION DEFAULT 0.7",
@@ -171,27 +195,161 @@ def ensure_memory_metadata_columns():
         "last_confirmed_at": "TIMESTAMP"
     }
 
-    with engine.begin() as connection:
-        for column_name, column_type in memory_columns.items():
-            if column_name not in column_names:
-                connection.execute(
-                    text(f"ALTER TABLE memories ADD COLUMN {column_name} {column_type}")
-                )
+    ensure_columns("memories", memory_columns)
 
 ensure_memory_metadata_columns()
 
-def get_or_create_diary_thread():
+def ensure_user_id_columns():
+    user_tables = [
+        "chat_messages",
+        "chat_threads",
+        "memories",
+        "profiles",
+        "goals",
+        "settings"
+    ]
+
+    for table_name in user_tables:
+        ensure_columns(table_name, {"user_id": "INTEGER"})
+
+
+ensure_user_id_columns()
+
+def normalize_email(email):
+    return (email or "").strip().lower()
+
+
+def hash_password(password):
+    salt = secrets.token_hex(16)
+    password_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        120000
+    ).hex()
+
+    return f"{salt}${password_hash}"
+
+
+def verify_password(password, saved_password_hash):
+    try:
+        salt, expected_hash = saved_password_hash.split("$", 1)
+    except ValueError:
+        return False
+
+    actual_hash = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        120000
+    ).hex()
+
+    return secrets.compare_digest(actual_hash, expected_hash)
+
+
+def create_user(name, email, password):
+    clean_name = (name or "").strip()
+    clean_email = normalize_email(email)
+
+    if not clean_name or not clean_email or len(password) < PASSWORD_MIN_LENGTH:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        existing_user = db.query(User).filter(User.email == clean_email).first()
+
+        if existing_user:
+            return None
+
+        user = User(
+            name=clean_name,
+            email=clean_email,
+            password_hash=hash_password(password)
+        )
+
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        return user
+    except IntegrityError:
+        db.rollback()
+        return None
+    finally:
+        db.close()
+
+
+def authenticate_user(email, password):
+    clean_email = normalize_email(email)
+    db = SessionLocal()
+
+    try:
+        user = db.query(User).filter(User.email == clean_email).first()
+
+        if user is None or not verify_password(password, user.password_hash):
+            return None
+
+        return user
+    finally:
+        db.close()
+
+
+def load_user(user_id):
+    if user_id is None:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        return db.query(User).filter(User.id == user_id).first()
+    finally:
+        db.close()
+
+
+def get_current_user(request):
+    user_id = request.session.get("user_id")
+    return load_user(user_id)
+
+
+def login_user(request, user_id):
+    request.session["user_id"] = user_id
+    claim_unowned_data(user_id)
+    get_or_create_diary_thread(user_id)
+    load_settings(user_id)
+
+
+def claim_unowned_data(user_id):
+    table_names = [
+        "chat_messages",
+        "chat_threads",
+        "memories",
+        "profiles",
+        "goals",
+        "settings"
+    ]
+
+    with engine.begin() as connection:
+        for table_name in table_names:
+            connection.execute(
+                text(f"UPDATE {table_name} SET user_id = :user_id WHERE user_id IS NULL"),
+                {"user_id": user_id}
+            )
+
+
+def get_or_create_diary_thread(user_id):
     db = SessionLocal()
 
     try:
         diary_thread = (
             db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
             .filter(ChatThread.thread_type == DIARY_THREAD_TYPE)
             .first()
         )
 
         if diary_thread is None:
             diary_thread = ChatThread(
+                user_id=user_id,
                 title="日記",
                 thread_type=DIARY_THREAD_TYPE
             )
@@ -201,6 +359,7 @@ def get_or_create_diary_thread():
 
         updated_count = (
             db.query(ChatMessage)
+            .filter(ChatMessage.user_id == user_id)
             .filter(ChatMessage.thread_id.is_(None))
             .update({"thread_id": diary_thread.id})
         )
@@ -212,22 +371,30 @@ def get_or_create_diary_thread():
     finally:
         db.close()
 
-def load_chat_thread(thread_id):
+
+def load_chat_thread(thread_id, user_id):
     db = SessionLocal()
 
     try:
-        thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+        thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.id == thread_id)
+            .filter(ChatThread.user_id == user_id)
+            .first()
+        )
 
         return thread
     finally:
         db.close()
 
-def load_chat_threads():
+
+def load_chat_threads(user_id):
     db = SessionLocal()
 
     try:
         threads = (
             db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
             .all()
         )
 
@@ -241,6 +408,7 @@ def load_chat_threads():
         for thread in sorted(threads, key=sort_thread):
             latest_message = (
                 db.query(ChatMessage)
+                .filter(ChatMessage.user_id == user_id)
                 .filter(ChatMessage.thread_id == thread.id)
                 .order_by(ChatMessage.created_at.desc())
                 .first()
@@ -265,7 +433,8 @@ def load_chat_threads():
     finally:
         db.close()
 
-def create_chat_thread(title):
+
+def create_chat_thread(title, user_id):
     clean_title = truncate_text(title, THREAD_TITLE_MAX_LENGTH)
 
     if not clean_title:
@@ -275,6 +444,7 @@ def create_chat_thread(title):
 
     try:
         thread = ChatThread(
+            user_id=user_id,
             title=clean_title,
             thread_type=CUSTOM_THREAD_TYPE
         )
@@ -287,25 +457,33 @@ def create_chat_thread(title):
     finally:
         db.close()
 
-def delete_chat_thread(thread_id):
+
+def delete_chat_thread(thread_id, user_id):
     db = SessionLocal()
 
     try:
-        thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+        thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.id == thread_id)
+            .filter(ChatThread.user_id == user_id)
+            .first()
+        )
 
         if thread is None or thread.thread_type != CUSTOM_THREAD_TYPE:
             return
 
-        db.query(ChatMessage).filter(ChatMessage.thread_id == thread_id).delete()
+        db.query(ChatMessage).filter(ChatMessage.user_id == user_id).filter(ChatMessage.thread_id == thread_id).delete()
         db.delete(thread)
         db.commit()
     finally:
         db.close()
 
-def save_message(role, content, thread_id=None):
+
+def save_message(role, content, thread_id=None, user_id=None):
     db = SessionLocal()
     try:
         new_message = ChatMessage(
+            user_id=user_id,
             thread_id=thread_id,
             role=role,
             content=content
@@ -314,13 +492,18 @@ def save_message(role, content, thread_id=None):
         db.add(new_message)
 
         if thread_id is not None:
-            thread = db.query(ChatThread).filter(ChatThread.id == thread_id).first()
+            thread = (
+                db.query(ChatThread)
+                .filter(ChatThread.id == thread_id)
+                .filter(ChatThread.user_id == user_id)
+                .first()
+            )
 
             if thread:
                 thread.updated_at = datetime.utcnow()
 
         db.commit()
-    finally: 
+    finally:
         db.close()
 
 
@@ -367,7 +550,8 @@ def save_memory(
     category,
     importance=3,
     confidence=0.7,
-    source_type="ai_inference"
+    source_type="ai_inference",
+    user_id=None
 ):
     content = (content or "").strip()
     category = (category or "").strip()
@@ -382,6 +566,7 @@ def save_memory(
 
     try:
         new_memory = Memory(
+            user_id=user_id,
             content=content,
             category=category,
             importance=importance,
@@ -404,7 +589,8 @@ def save_or_update_memory(
     category,
     importance=3,
     confidence=0.7,
-    source_type="ai_inference"
+    source_type="ai_inference",
+    user_id=None
 ):
     content = (content or "").strip()
     category = (category or "").strip()
@@ -420,6 +606,7 @@ def save_or_update_memory(
     try:
         existing_memory = (
             db.query(Memory)
+            .filter(Memory.user_id == user_id)
             .filter(Memory.is_active.is_(True))
             .filter(Memory.category == category)
             .filter(Memory.content == content)
@@ -444,6 +631,7 @@ def save_or_update_memory(
             return existing_memory.id
 
         new_memory = Memory(
+            user_id=user_id,
             content=content,
             category=category,
             importance=importance,
@@ -461,12 +649,13 @@ def save_or_update_memory(
         db.close()
 
 
-def load_memories():
+def load_memories(user_id):
     db = SessionLocal()
 
     try:
         memories = (
             db.query(Memory)
+            .filter(Memory.user_id == user_id)
             .filter(Memory.is_active.is_(True))
             .order_by(
                 Memory.importance.desc(),
@@ -494,12 +683,13 @@ def load_memories():
         db.close()
 
 
-def load_memory_items():
+def load_memory_items(user_id):
     db = SessionLocal()
 
     try:
         memories = (
             db.query(Memory)
+            .filter(Memory.user_id == user_id)
             .filter(Memory.is_active.is_(True))
             .order_by(
                 Memory.importance.desc(),
@@ -531,11 +721,16 @@ def load_memory_items():
     finally:
         db.close()
 
-def delete_memory(memory_id):
+def delete_memory(memory_id, user_id):
     db = SessionLocal()
 
     try:
-        memory = db.query(Memory).filter(Memory.id == memory_id).first()
+        memory = (
+            db.query(Memory)
+            .filter(Memory.id == memory_id)
+            .filter(Memory.user_id == user_id)
+            .first()
+        )
 
         if memory:
             memory.is_active = False
@@ -543,24 +738,34 @@ def delete_memory(memory_id):
     finally:
         db.close()
 
-def load_profile():
+def load_profile(user_id):
     db = SessionLocal()
 
     try:
-        profile = db.query(Profile).order_by(Profile.created_at.desc()).first()
+        profile = (
+            db.query(Profile)
+            .filter(Profile.user_id == user_id)
+            .order_by(Profile.created_at.desc())
+            .first()
+        )
 
         return profile
     finally:
         db.close()
 
-def save_profile(name, school_year, current_focus, life_direction, values, weaknesses, interests, communication_preference, best_success_experience, success_journey, success_feelings, success_lessons):
+def save_profile(user_id, name, school_year, current_focus, life_direction, values, weaknesses, interests, communication_preference, best_success_experience, success_journey, success_feelings, success_lessons):
     db = SessionLocal()
 
     try:
-        profile = db.query(Profile).order_by(Profile.created_at.desc()).first()
+        profile = (
+            db.query(Profile)
+            .filter(Profile.user_id == user_id)
+            .order_by(Profile.created_at.desc())
+            .first()
+        )
 
         if profile is None:
-            profile = Profile()
+            profile = Profile(user_id=user_id)
             db.add(profile)
 
         profile.name = name
@@ -600,11 +805,12 @@ PASにどう接してほしいか: {profile.communication_preference}
 そこから学んだこと: {profile.success_lessons}
 """
 
-def save_goal(title, description, goal_type, status, priority, deadline):
+def save_goal(user_id, title, description, goal_type, status, priority, deadline):
     db = SessionLocal()
 
     try:
         new_goal = Goal(
+            user_id=user_id,
             title=title,
             description=description,
             goal_type=goal_type,
@@ -618,24 +824,34 @@ def save_goal(title, description, goal_type, status, priority, deadline):
     finally:
         db.close()
 
-def load_goals():
+def load_goals(user_id):
     db = SessionLocal()
 
     try:
-        goals = db.query(Goal).order_by(Goal.created_at.desc()).all()
+        goals = (
+            db.query(Goal)
+            .filter(Goal.user_id == user_id)
+            .order_by(Goal.created_at.desc())
+            .all()
+        )
 
         return goals
     finally:
         db.close()
 
-def load_settings():
+def load_settings(user_id):
     db = SessionLocal()
 
     try:
-        settings = db.query(Settings).order_by(Settings.created_at.desc()).first()
+        settings = (
+            db.query(Settings)
+            .filter(Settings.user_id == user_id)
+            .order_by(Settings.created_at.desc())
+            .first()
+        )
 
         if settings is None:
-            settings = Settings()
+            settings = Settings(user_id=user_id)
             db.add(settings)
             db.commit()
 
@@ -643,14 +859,19 @@ def load_settings():
     finally:
         db.close()
 
-def save_settings(default_persona, theme_name, response_length):
+def save_settings(user_id, default_persona, theme_name, response_length):
     db = SessionLocal()
 
     try:
-        settings = db.query(Settings).order_by(Settings.created_at.desc()).first()
+        settings = (
+            db.query(Settings)
+            .filter(Settings.user_id == user_id)
+            .order_by(Settings.created_at.desc())
+            .first()
+        )
 
         if settings is None:
-            settings = Settings()
+            settings = Settings(user_id=user_id)
             db.add(settings)
 
         settings.default_persona = default_persona
@@ -679,11 +900,11 @@ def format_goals_for_prompt(goals):
 
     return goals_text
 
-def load_messages(thread_id=None):
+def load_messages(thread_id=None, user_id=None):
     db = SessionLocal()
 
     try:
-        query = db.query(ChatMessage)
+        query = db.query(ChatMessage).filter(ChatMessage.user_id == user_id)
 
         if thread_id is not None:
             query = query.filter(ChatMessage.thread_id == thread_id)
@@ -699,11 +920,11 @@ def load_messages(thread_id=None):
     finally:
         db.close()
 
-def load_chat_items(thread_id=None):
+def load_chat_items(thread_id=None, user_id=None):
     db = SessionLocal()
 
     try:
-        query = db.query(ChatMessage)
+        query = db.query(ChatMessage).filter(ChatMessage.user_id == user_id)
 
         if thread_id is not None:
             query = query.filter(ChatMessage.thread_id == thread_id)
@@ -937,6 +1158,11 @@ PASの返答ルール:
 """
 
 app = FastAPI()
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    same_site="lax"
+)
 
 app.mount(
     "/static",
@@ -946,11 +1172,97 @@ app.mount(
 
 templates = Jinja2Templates(directory="templates")
 
+@app.get("/signup")
+def signup_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="signup.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "",
+            "name": "",
+            "email": ""
+        }
+    )
+
+
+@app.post("/signup")
+def signup_action(
+    request: Request,
+    name: str = Form(""),
+    email: str = Form(""),
+    password: str = Form("")
+):
+    user = create_user(name, email, password)
+
+    if user is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="signup.html",
+            context={
+                "settings": {"theme_name": "calm"},
+                "error": f"名前・メール・{PASSWORD_MIN_LENGTH}文字以上のパスワードを確認してください。",
+                "name": name,
+                "email": email
+            }
+        )
+
+    login_user(request, user.id)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.get("/login")
+def login_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "",
+            "email": ""
+        }
+    )
+
+
+@app.post("/login")
+def login_action(
+    request: Request,
+    email: str = Form(""),
+    password: str = Form("")
+):
+    user = authenticate_user(email, password)
+
+    if user is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="login.html",
+            context={
+                "settings": {"theme_name": "calm"},
+                "error": "メールアドレスかパスワードが違います。",
+                "email": email
+            }
+        )
+
+    login_user(request, user.id)
+    return RedirectResponse(url="/", status_code=303)
+
+
+@app.post("/logout")
+def logout_action(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+
 @app.get("/")
 def home(request: Request):
-    settings = load_settings()
-    get_or_create_diary_thread()
-    chat_threads = load_chat_threads()
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
+    get_or_create_diary_thread(current_user.id)
+    chat_threads = load_chat_threads(current_user.id)
     custom_thread_count = sum(
         1 for thread in chat_threads if thread["thread_type"] == CUSTOM_THREAD_TYPE
     )
@@ -960,6 +1272,7 @@ def home(request: Request):
         name="home.html",
         context={
             "settings": settings,
+            "current_user": current_user,
             "chat_threads": chat_threads,
             "custom_thread_count": custom_thread_count,
             "thread_title_max_length": THREAD_TITLE_MAX_LENGTH
@@ -968,9 +1281,14 @@ def home(request: Request):
 
 @app.get("/chat")
 def chat_page(request: Request):
-    settings = load_settings()
-    diary_thread = get_or_create_diary_thread()
-    chat_items = load_chat_items(diary_thread.id)
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
+    diary_thread = get_or_create_diary_thread(current_user.id)
+    chat_items = load_chat_items(diary_thread.id, current_user.id)
 
     return templates.TemplateResponse(
         request=request,
@@ -988,13 +1306,18 @@ def chat_page(request: Request):
 
 @app.get("/chat/{thread_id}")
 def chat_thread_page(request: Request, thread_id: int):
-    settings = load_settings()
-    thread = load_chat_thread(thread_id)
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
+    thread = load_chat_thread(thread_id, current_user.id)
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
 
-    chat_items = load_chat_items(thread_id)
+    chat_items = load_chat_items(thread_id, current_user.id)
 
     return templates.TemplateResponse(
         request=request,
@@ -1011,13 +1334,18 @@ def chat_thread_page(request: Request, thread_id: int):
     )
 
 @app.post("/chat_threads")
-def chat_thread_create(title: str = Form("")):
+def chat_thread_create(request: Request, title: str = Form("")):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
     clean_title = title.strip()
 
     if not clean_title:
         return RedirectResponse(url="/", status_code=303)
 
-    thread = create_chat_thread(clean_title)
+    thread = create_chat_thread(clean_title, current_user.id)
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
@@ -1025,15 +1353,25 @@ def chat_thread_create(title: str = Form("")):
     return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
 
 @app.post("/chat_threads/{thread_id}/delete")
-def chat_thread_delete(thread_id: int):
-    delete_chat_thread(thread_id)
+def chat_thread_delete(request: Request, thread_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    delete_chat_thread(thread_id, current_user.id)
 
     return RedirectResponse(url="/", status_code=303)
 
 @app.get("/memories")
 def memories_page(request: Request):
-    memories = load_memory_items()
-    settings = load_settings()
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    memories = load_memory_items(current_user.id)
+    settings = load_settings(current_user.id)
     return templates.TemplateResponse(
         request=request,
         name="memories.html",
@@ -1045,8 +1383,13 @@ def memories_page(request: Request):
 
 @app.get("/profile")
 def profile_page(request: Request):
-    profile = load_profile()
-    settings = load_settings()
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    profile = load_profile(current_user.id)
+    settings = load_settings(current_user.id)
 
     return templates.TemplateResponse(
         request=request,
@@ -1073,7 +1416,13 @@ def profile_save(
     success_feelings: str = Form(""),
     success_lessons: str = Form("")
 ):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
     save_profile(
+        user_id=current_user.id,
         name=name,
         school_year=school_year,
         current_focus=current_focus,
@@ -1092,8 +1441,13 @@ def profile_save(
 
 @app.get("/goals")
 def goals_page(request: Request):
-    goals = load_goals()
-    settings = load_settings()
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    goals = load_goals(current_user.id)
+    settings = load_settings(current_user.id)
     return templates.TemplateResponse(
         request=request,
         name="goals.html",
@@ -1105,6 +1459,7 @@ def goals_page(request: Request):
 
 @app.post("/goals")
 def goal_save(
+    request: Request,
     title: str = Form(""),
     description: str = Form(""),
     goal_type: str = Form("short"),
@@ -1112,7 +1467,13 @@ def goal_save(
     priority: str = Form("medium"),
     deadline: str = Form("")
 ):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
     save_goal(
+        user_id=current_user.id,
         title=title,
         description=description,
         goal_type=goal_type,
@@ -1125,7 +1486,12 @@ def goal_save(
 
 @app.get("/settings")
 def settings_page(request: Request):
-    settings = load_settings()
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    settings = load_settings(current_user.id)
 
     return templates.TemplateResponse(
         request=request,
@@ -1137,11 +1503,18 @@ def settings_page(request: Request):
 
 @app.post("/settings")
 def settings_save(
+    request: Request,
     default_persona: str = Form("friend"),
     theme_name: str = Form("calm"),
     response_length: str = Form("balanced")
 ):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
     save_settings(
+        user_id=current_user.id,
         default_persona=default_persona,
         theme_name=theme_name,
         response_length=response_length
@@ -1151,7 +1524,12 @@ def settings_save(
 
 @app.post("/chat/{thread_id}")
 def chat_send(request: Request, thread_id: int, message: str = Form(...)):
-    thread = load_chat_thread(thread_id)
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    thread = load_chat_thread(thread_id, current_user.id)
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
@@ -1161,17 +1539,17 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     if not clean_message:
         return RedirectResponse(url=f"/chat/{thread_id}", status_code=303)
 
-    history = load_messages(thread_id)
-    memories = load_memories()
-    profile = load_profile()
+    history = load_messages(thread_id, current_user.id)
+    memories = load_memories(current_user.id)
+    profile = load_profile(current_user.id)
     profile_text = format_profile_for_prompt(profile)
-    goals = load_goals()
+    goals = load_goals(current_user.id)
     goals_text = format_goals_for_prompt(goals)
-    settings = load_settings()
+    settings = load_settings(current_user.id)
     persona = settings.default_persona
     response_length = settings.response_length
 
-    save_message("user", clean_message, thread_id)
+    save_message("user", clean_message, thread_id, current_user.id)
 
     memory_data = {
         "should_save": False,
@@ -1207,7 +1585,8 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
             category=memory_data["category"],
             importance=memory_data.get("importance", 3),
             confidence=memory_data.get("confidence", 0.7),
-            source_type=memory_data.get("source_type", "ai_inference")
+            source_type=memory_data.get("source_type", "ai_inference"),
+            user_id=current_user.id
         )
 
 
@@ -1236,9 +1615,9 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
         should_save_ai_message = False
 
     if should_save_ai_message:
-        save_message("assistant", ai_message, thread_id)
+        save_message("assistant", ai_message, thread_id, current_user.id)
 
-    chat_items = load_chat_items(thread_id)
+    chat_items = load_chat_items(thread_id, current_user.id)
 
     if not should_save_ai_message:
         chat_items.append({
@@ -1263,6 +1642,11 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     )
 
 @app.post("/memories/{memory_id}/delete")
-def delete_memory_action(memory_id: int):
-    delete_memory(memory_id)
+def delete_memory_action(request: Request, memory_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    delete_memory(memory_id, current_user.id)
     return RedirectResponse(url="/memories", status_code=303)
