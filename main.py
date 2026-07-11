@@ -1236,7 +1236,14 @@ def format_timeline_for_prompt(timeline_items):
 
 
 def calendar_config_ready():
-    return bool(GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET and Flow and Credentials and build)
+    return bool(
+        GOOGLE_CLIENT_ID
+        and GOOGLE_CLIENT_SECRET
+        and GOOGLE_REDIRECT_URI
+        and Flow
+        and Credentials
+        and build
+    )
 
 
 def get_calendar_redirect_uri(request):
@@ -1329,6 +1336,39 @@ def build_calendar_service(user_id):
         return None, "Google Calendarの認証が切れています。もう一度接続してください。"
 
     return build("calendar", "v3", credentials=credentials), ""
+
+
+def save_local_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
+    title = (title or "").strip()
+    description = (description or "").strip()
+    location = (location or "").strip()
+    start_value = parse_datetime_value(start_datetime)
+    end_value = parse_datetime_value(end_datetime)
+
+    if not title or start_value is None or end_value is None:
+        return False, "予定名、開始日時、終了日時を入力してください。"
+
+    if end_value < start_value:
+        return False, "終了日時は開始日時より後にしてください。"
+
+    db = SessionLocal()
+
+    try:
+        calendar_event = CalendarEvent(
+            user_id=user_id,
+            google_event_id=None,
+            title=title,
+            description=description,
+            start_datetime=start_value,
+            end_datetime=end_value,
+            location=location
+        )
+
+        db.add(calendar_event)
+        db.commit()
+        return True, "PAS内の予定として保存しました。"
+    finally:
+        db.close()
 
 
 def upsert_calendar_event(user_id, event):
@@ -1437,6 +1477,29 @@ def create_google_calendar_event(user_id, title, description, start_datetime, en
     return True, "予定を作成しました。"
 
 
+def create_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
+    calendar_account = load_calendar_account(user_id)
+
+    if calendar_config_ready() and calendar_account is not None:
+        return create_google_calendar_event(
+            user_id=user_id,
+            title=title,
+            description=description,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+            location=location
+        )
+
+    return save_local_calendar_event(
+        user_id=user_id,
+        title=title,
+        description=description,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        location=location
+    )
+
+
 def delete_google_calendar_event(user_id, calendar_event_id):
     db = SessionLocal()
 
@@ -1490,7 +1553,8 @@ def load_calendar_events(user_id):
                 "description": event.description,
                 "start_text": format_datetime(event.start_datetime),
                 "end_text": format_datetime(event.end_datetime),
-                "location": event.location
+                "location": event.location,
+                "source_label": "Google" if event.google_event_id else "PAS"
             })
 
         return calendar_items
@@ -2341,6 +2405,7 @@ def calendar_page(request: Request):
             "calendar_ready": calendar_config_ready(),
             "calendar_connected": calendar_account is not None,
             "calendar_items": calendar_items,
+            "calendar_redirect_uri": get_calendar_redirect_uri(request),
             "message": request.query_params.get("message", "")
         }
     )
@@ -2424,7 +2489,7 @@ def calendar_event_create(
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    _, message = create_google_calendar_event(
+    _, message = create_calendar_event(
         user_id=current_user.id,
         title=title,
         description=description,

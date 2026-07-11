@@ -369,6 +369,38 @@ body {
     color: var(--text);
 }
 
+.setup-panel {
+    max-width: 560px;
+    margin: 0 auto 28px;
+    padding: 18px;
+    border: 1px solid var(--field-border);
+    border-radius: 14px;
+    background: var(--field-bg);
+}
+
+.setup-panel h2 {
+    max-width: none;
+    margin: 0 0 10px;
+    font-size: 20px;
+}
+
+.setup-panel p {
+    margin: 0 0 12px;
+    color: var(--subtle);
+    line-height: 1.7;
+}
+
+.setup-panel ul {
+    max-width: none;
+    margin: 0;
+    padding-left: 20px;
+}
+
+.setup-panel li {
+    margin-bottom: 8px;
+    overflow-wrap: anywhere;
+}
+
 .action-link {
     display: inline-block;
     margin: 0 auto 24px;
