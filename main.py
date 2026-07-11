@@ -171,6 +171,23 @@ def load_chat_threads():
     finally:
         db.close()
 
+def create_chat_thread(title):
+    db = SessionLocal()
+
+    try:
+        thread = ChatThread(
+            title=title,
+            thread_type="custom"
+        )
+
+        db.add(thread)
+        db.commit()
+        db.refresh(thread)
+
+        return thread
+    finally:
+        db.close()
+
 def save_message(role, content, thread_id=None):
     db = SessionLocal()
     try:
@@ -662,6 +679,17 @@ def chat_thread_page(request: Request, thread_id: int):
             "thread_title": thread.title
         }
     )
+
+@app.post("/chat_threads")
+def chat_thread_create(title: str = Form("")):
+    clean_title = title.strip()
+
+    if not clean_title:
+        return RedirectResponse(url="/", status_code=303)
+
+    thread = create_chat_thread(clean_title[:200])
+
+    return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
 
 @app.get("/memories")
 def memories_page(request: Request):

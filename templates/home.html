@@ -27,6 +27,11 @@
         <section class="thread-list">
             <h2>チャット</h2>
 
+            <form class="thread-form" method="post" action="/chat_threads">
+                <input type="text" name="title" placeholder="新しいチャット名" autocomplete="off" required>
+                <button type="submit">作成</button>
+            </form>
+
             {% if chat_threads %}
                 <div class="thread-links">
                     {% for thread in chat_threads %}
