@@ -365,7 +365,7 @@ body {
     border: none;
     border-radius: 22px;
     background: rgba(255, 255, 255, 0.92);
-    color: var(--text);
+    color: #111827;
     font-size: 16px;
     outline: none;
 }
@@ -464,7 +464,7 @@ body {
     }
 
     .chat-page {
-        padding: 24px 14px 104px;
+        padding: 24px 14px 24px;
     }
 
     .chat-header {
@@ -498,8 +498,12 @@ body {
     }
 
     .chat-form {
-        bottom: 10px;
-        width: calc(100% - 20px);
+        position: sticky;
+        left: auto;
+        bottom: env(safe-area-inset-bottom, 0);
+        transform: none;
+        width: 100%;
+        margin-top: 24px;
         padding: 8px;
         gap: 8px;
         border-radius: 26px;
@@ -509,6 +513,7 @@ body {
         height: 42px;
         min-width: 0;
         font-size: 16px;
+        color: #111827;
     }
 
     .chat-form button {
