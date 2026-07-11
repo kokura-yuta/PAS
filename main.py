@@ -16,6 +16,7 @@ load_dotenv()
 
 CHAT_HISTORY_LIMIT = 10
 CHAT_DISPLAY_LIMIT = 50
+MEMORY_EXTRACTION_MIN_LENGTH = 20
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
@@ -35,6 +36,15 @@ class ChatMessage(Base):
     role = Column(String(20))
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class ChatThread(Base):
+    __tablename__ = "chat_threads"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(String(200))
+    thread_type = Column(String(50), default="custom")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class Memory(Base):
@@ -663,6 +673,11 @@ def settings_save(
 
 @app.post("/chat")
 def chat_send(request: Request, message: str = Form(...)):
+    clean_message = message.strip()
+
+    if not clean_message:
+        return RedirectResponse(url="/chat", status_code=303)
+
     history = load_messages()
     memories = load_memories()
     profile = load_profile()
@@ -673,8 +688,16 @@ def chat_send(request: Request, message: str = Form(...)):
     persona = settings.default_persona
     response_length = settings.response_length
 
-    save_message("user", message)
-    memory_data = extract_memory_from_message(message)
+    save_message("user", clean_message)
+
+    memory_data = {
+        "should_save": False,
+        "category": "",
+        "content": ""
+    }
+
+    if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
+        memory_data = extract_memory_from_message(clean_message)
 
     should_save_memory = (
         memory_data.get("should_save")
@@ -691,7 +714,7 @@ def chat_send(request: Request, message: str = Form(...)):
 
     response = client.responses.create(
         model="gpt-4.1-mini",
-        input=build_ai_prompt(message, history, memories, profile_text, goals_text, persona, response_length)
+        input=build_ai_prompt(clean_message, history, memories, profile_text, goals_text, persona, response_length)
     )
 
     ai_message = response.output_text
