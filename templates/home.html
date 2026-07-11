@@ -32,6 +32,46 @@
             <a href="/settings">設定</a>
         </nav>
 
+        <section class="today-panel">
+            <p class="eyebrow">Today</p>
+            <h2>{{ home_snapshot.daily_message }}</h2>
+
+            <div class="today-grid">
+                <div>
+                    <h3>今日の予定</h3>
+                    {% if home_snapshot.today_events %}
+                        {% for event in home_snapshot.today_events %}
+                            <p>{{ event.time }} {{ event.title }}</p>
+                        {% endfor %}
+                    {% else %}
+                        <p>今日の予定はまだありません。</p>
+                    {% endif %}
+                </div>
+
+                <div>
+                    <h3>進行中の目標</h3>
+                    {% if home_snapshot.active_goals %}
+                        {% for goal in home_snapshot.active_goals %}
+                            <p>{{ goal.title }}</p>
+                        {% endfor %}
+                    {% else %}
+                        <p>まだ進行中の目標はありません。</p>
+                    {% endif %}
+                </div>
+
+                <div>
+                    <h3>PASが覚えていること</h3>
+                    {% if home_snapshot.key_memories %}
+                        {% for memory in home_snapshot.key_memories %}
+                            <p>{{ memory }}</p>
+                        {% endfor %}
+                    {% else %}
+                        <p>話すほど、ここにあなたらしさが増えていきます。</p>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
         <section class="thread-list">
             <h2>チャット</h2>
 

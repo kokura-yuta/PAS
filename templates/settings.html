@@ -33,6 +33,7 @@
             <br><br>
             <label>返答の長さ</label><br>
             <select name="response_length">
+                <option value="auto" {% if settings.response_length == "auto" %}selected{% endif %}>自動</option>
                 <option value="concise" {% if settings.response_length == "concise" %}selected{% endif %}>短め</option>
                 <option value="balanced" {% if settings.response_length == "balanced" %}selected{% endif %}>普通・臨機応変</option>
                 <option value="detailed" {% if settings.response_length == "detailed" %}selected{% endif %}>詳しめ</option>

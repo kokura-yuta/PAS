@@ -189,7 +189,7 @@ class Settings(Base):
 
     default_persona = Column(String(50), default="friend")
     theme_name = Column(String(50), default="calm")
-    response_length = Column(String(50), default="balanced")
+    response_length = Column(String(50), default="auto")
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
@@ -740,6 +740,7 @@ def load_memories(user_id):
                 Memory.confidence.desc(),
                 Memory.created_at.desc()
             )
+            .limit(20)
             .all()
         )
 
@@ -1413,6 +1414,92 @@ def format_calendar_for_prompt(calendar_items):
     return calendar_text
 
 
+def load_home_snapshot(user_id):
+    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+
+    db = SessionLocal()
+
+    try:
+        today_events = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.start_datetime >= today_start)
+            .filter(CalendarEvent.start_datetime < today_end)
+            .order_by(CalendarEvent.start_datetime.asc())
+            .limit(3)
+            .all()
+        )
+
+        active_goals = (
+            db.query(Goal)
+            .filter(Goal.user_id == user_id)
+            .filter(Goal.status == "active")
+            .order_by(Goal.created_at.desc())
+            .limit(3)
+            .all()
+        )
+
+        key_memories = (
+            db.query(Memory)
+            .filter(Memory.user_id == user_id)
+            .filter(Memory.is_active.is_(True))
+            .order_by(Memory.importance.desc(), Memory.confidence.desc())
+            .limit(3)
+            .all()
+        )
+
+        timeline_items = (
+            db.query(TimelineMemory)
+            .filter(TimelineMemory.user_id == user_id)
+            .filter(TimelineMemory.temporal_type.in_(["present", "future"]))
+            .order_by(TimelineMemory.importance.desc(), TimelineMemory.event_date.asc().nullslast())
+            .limit(3)
+            .all()
+        )
+
+        today_event_items = [
+            {
+                "title": event.title,
+                "time": format_datetime(event.start_datetime),
+                "location": event.location
+            }
+            for event in today_events
+        ]
+        goal_items = [
+            {
+                "title": goal.title,
+                "priority": goal.priority,
+                "deadline": goal.deadline
+            }
+            for goal in active_goals
+        ]
+        memory_items = [memory.content for memory in key_memories]
+        timeline_texts = [
+            f"{get_timeline_label(item.temporal_type)}: {item.content}"
+            for item in timeline_items
+        ]
+
+        if today_event_items:
+            daily_message = f"今日は「{today_event_items[0]['title']}」があるね。そこに合わせて無理なく整えよう。"
+        elif goal_items:
+            daily_message = f"今日は「{goal_items[0]['title']}」を少しだけ進める日にしよう。"
+        elif timeline_texts:
+            daily_message = "今の流れを見ながら、今日の一歩を一緒に決めよう。"
+        else:
+            daily_message = "今日は何から整える？短くでいいから話してみて。"
+
+        return {
+            "daily_message": daily_message,
+            "today_events": today_event_items,
+            "active_goals": goal_items,
+            "key_memories": memory_items,
+            "timeline_items": timeline_texts
+        }
+    finally:
+        db.close()
+
+
 client = OpenAI(
     api_key=os.getenv("OPENAI_API_KEY")
 )
@@ -1489,22 +1576,23 @@ content は1つの記憶だけを短い1文にしてください。
 PAS_PERSONAS = {
     "friend": """
 あなたはPASです。
-友達のように自然で、相談しやすい口調で返してください。
-相手の気持ちを受け止め、安心して話せる雰囲気を作ってください。
-アドバイスは押しつけず、やさしく背中を押す形にしてください。
+親しい友達のように、自然で少し砕けた口調で返してください。
+固い敬語や説明口調を避け、「そっか」「それはきついね」のような自然な相づちを使ってください。
+相手の気持ちを先に受け止め、アドバイスは求められた時や必要な時だけ短く出してください。
 """,
     "mentor": """
 あなたはPASです。
 ユーザーの成長を支えるメンターとして返してください。
-感情に寄り添いながらも、学びや改善点を一緒に整理してください。
-次に取るべき行動が見えるように、具体的な提案をしてください。
+まず気持ちを受け止め、そのあと状況を一緒に整理してください。
+すぐに正解を押しつけず、ユーザーが自分で気づける質問を1つ入れてください。
+提案は最後に、次の一歩だけを具体的に出してください。
 """,
     "strict_teacher": """
 あなたはPASです。
 厳しい先生として、甘やかさずに現実的な視点で返してください。
-言い訳や曖昧な考えがある場合は、はっきり指摘してください。
+言い訳や曖昧な考えがある場合は、短くはっきり指摘してください。
 ただし人格否定はせず、改善すべき行動・考え方・次の一手を具体的に示してください。
-必要であれば、優しい言葉よりも成長につながる厳しい言葉を優先してください。
+長い説教は避け、刺さる一言と次の行動に絞ってください。
 """,
     "secretary": """
 あなたはPASです。
@@ -1517,9 +1605,14 @@ PAS_PERSONAS = {
 ライフコーチとして、ユーザーの目標・価値観・長期的な成長を踏まえて返してください。
 すぐに答えを押しつけるのではなく、必要に応じて問いを使い、ユーザー自身が気づけるように支援してください。
 感情に寄り添いながら、前に進むための考え方や行動を提案してください。
-"""
+	"""
 }
 RESPONSE_LENGTH_PROMPTS = {
+    "auto": """
+ユーザーの発言に合わせて長さを自動で決めてください。
+短い雑談・感情の吐き出しには1〜3文で返してください。
+深い相談・整理が必要な話だけ、必要な分だけ詳しく返してください。
+""",
     "concise": """
 基本は2〜4文で簡潔に返してください。
 必要な時だけ少し補足してください。
@@ -1537,21 +1630,21 @@ RESPONSE_LENGTH_PROMPTS = {
 PAS_RESPONSE_RULES = """
 返答の基本方針:
 - その場のノリだけで返さず、ユーザーの状況・目標・過去の情報を踏まえて返してください。
-- ただ共感するだけで終わらず、必要に応じて案・選択肢・おすすめ・理由・次の行動を示してください。
-- すべての返答を長くしすぎず、ユーザーの発言が軽い時は自然に短く返してください。
+- まず会話として自然に返してください。説明文・レポート・箇条書きに寄りすぎないでください。
+- ユーザーの発言が軽い時は自然に短く返してください。
 - 決めつけは避け、情報が足りない時は質問してください。
+- アドバイスより先に、共感か確認質問を優先してください。
+- 1回の返信で質問は原則1つだけにしてください。
 
 相談・意思決定への返答:
-1. ユーザーの状況を短く整理する
-2. 考えられる選択肢を2〜3個出す
-3. おすすめを1つ示す
-4. なぜそう考えたか理由を説明する
-5. 今日できる次の一歩を具体的に出す
+1. 気持ちを短く受け止める
+2. 何が一番大事か確認する質問を1つ出す
+3. 十分に状況が見えている時だけ、選択肢や次の一歩を短く出す
 
 感情・雑談への返答:
 1. 気持ちを自然に受け止める
-2. 背景にありそうなことを整理する
-3. 必要なら小さい提案か質問を1つだけ出す
+2. 分析しすぎず、相づちを返す
+3. 必要なら短い質問を1つだけ出す
 
 知識説明への返答:
 1. まず結論を伝える
@@ -1563,6 +1656,7 @@ PAS_RESPONSE_RULES = """
 - プロフィール、目標、長期記憶、直近の会話を根拠として使う場合は、どの情報をもとに考えたか分かるようにしてください。
 - 外部情報やネット上の根拠が必要な場合は、今この場で確認できない情報を事実として断言しないでください。
 - 推測は推測として伝え、事実と混ぜないでください。
+- Core Memoryを使う時は「前も話してたよね」を自然に使ってよいですが、毎回は使わないでください。
 """
 
 
@@ -1583,6 +1677,99 @@ def build_thread_prompt(thread_title, thread_type):
 """
 
 
+def detect_conversation_mode(message):
+    message = (message or "").strip()
+    lower_message = message.lower()
+
+    emotion_words = [
+        "つらい", "辛い", "しんどい", "不安", "怖い", "疲れた", "きつい",
+        "むずい", "難しい", "悲しい", "泣き", "焦る", "やばい", "無理"
+    ]
+    advice_words = [
+        "どうすれば", "どうしたら", "何したら", "なにしたら", "教えて",
+        "方法", "やり方", "改善", "相談", "悩み", "選ぶ", "決め"
+    ]
+    planning_words = [
+        "予定", "目標", "計画", "今日", "明日", "来週", "やること",
+        "タスク", "進捗", "締切", "面接", "インターン"
+    ]
+
+    if any(word in message for word in emotion_words):
+        return "empathy"
+
+    if any(word in message for word in planning_words):
+        return "planning"
+
+    if any(word in message for word in advice_words) or "?" in message or "？" in message:
+        return "advice"
+
+    if "とは" in message or "説明" in message or "なぜ" in message:
+        return "knowledge"
+
+    if any(word in lower_message for word in ["why", "how", "what"]):
+        return "knowledge"
+
+    if len(message) <= 14:
+        return "short_chat"
+
+    return "conversation"
+
+
+def build_response_style_prompt(message, response_length, thread_type):
+    mode = detect_conversation_mode(message)
+
+    if response_length == "concise":
+        return """
+ユーザーは短めの返答を選んでいます。
+原則2〜4文。箇条書きは必要な時だけ。
+"""
+
+    if response_length == "detailed":
+        return """
+ユーザーは詳しめの返答を選んでいます。
+ただし最初に結論を出し、長くなる時は見出しを少なくして読みやすくしてください。
+"""
+
+    mode_prompts = {
+        "short_chat": """
+今回の発言は短い会話です。
+1〜2文で自然に返してください。
+分析・長い説明・箇条書きは禁止です。
+必要なら短い質問を1つだけ返してください。
+""",
+        "empathy": """
+今回の発言は感情の吐き出しです。
+最初は共感を優先してください。
+すぐに解決策を並べず、1〜3文で受け止めてから、短い質問を1つだけしてください。
+""",
+        "planning": """
+今回の発言は予定・目標・行動に関係しています。
+まず状況を短く受け止め、今日できる一歩を1つだけ提案してください。
+CalendarやTimelineに関係する情報があれば自然に使ってください。
+""",
+        "advice": """
+今回の発言は相談です。
+共感→確認質問→必要なら小さい提案、の順番で返してください。
+最初から選択肢を大量に出さないでください。
+""",
+        "knowledge": """
+今回の発言は説明を求めています。
+最初に結論を短く出し、そのあと必要な理由や例を加えてください。
+""",
+        "conversation": """
+今回の発言は通常会話です。
+会話の流れを優先し、長く説明しすぎないでください。
+"""
+    }
+
+    if thread_type == DIARY_THREAD_TYPE and mode in ["empathy", "conversation", "short_chat"]:
+        return mode_prompts[mode] + """
+日記チャットなので、評価や説教よりも、気持ちを言葉にする支援を優先してください。
+"""
+
+    return mode_prompts[mode]
+
+
 def build_ai_prompt(
     message,
     history,
@@ -1598,6 +1785,7 @@ def build_ai_prompt(
 ):
     persona_prompt = PAS_PERSONAS.get(persona, PAS_PERSONAS["friend"])
     length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
+    response_style_prompt = build_response_style_prompt(message, response_length, thread_type)
     thread_prompt = build_thread_prompt(thread_title, thread_type)
     return f"""
 {persona_prompt}
@@ -1610,6 +1798,9 @@ PASの返答ルール:
 
 返答の長さ:
 {length_prompt}
+
+今回の返し方:
+{response_style_prompt}
 
 プロフィール:
 {profile_text}
@@ -1739,6 +1930,7 @@ def home(request: Request):
     settings = load_settings(current_user.id)
     get_or_create_diary_thread(current_user.id)
     chat_threads = load_chat_threads(current_user.id)
+    home_snapshot = load_home_snapshot(current_user.id)
     custom_thread_count = sum(
         1 for thread in chat_threads if thread["thread_type"] == CUSTOM_THREAD_TYPE
     )
@@ -1749,6 +1941,7 @@ def home(request: Request):
         context={
             "settings": settings,
             "current_user": current_user,
+            "home_snapshot": home_snapshot,
             "chat_threads": chat_threads,
             "custom_thread_count": custom_thread_count,
             "thread_title_max_length": THREAD_TITLE_MAX_LENGTH
