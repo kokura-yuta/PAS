@@ -200,6 +200,11 @@ body:has(.study-app) {
     gap: 18px;
 }
 
+.study-topbar {
+    position: relative;
+    z-index: 70;
+}
+
 .study-brand {
     display: grid;
     gap: 4px;
@@ -213,6 +218,7 @@ body:has(.study-app) {
 
 .study-menu {
     position: relative;
+    z-index: 75;
     flex-shrink: 0;
 }
 
@@ -246,7 +252,7 @@ body:has(.study-app) {
     position: absolute;
     top: 54px;
     right: 0;
-    z-index: 10;
+    z-index: 90;
     display: grid;
     gap: 8px;
     min-width: 190px;
