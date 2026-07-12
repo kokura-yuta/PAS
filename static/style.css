@@ -180,7 +180,7 @@ body {
 .life-os-panel,
 .specialist-panel {
     margin-top: 28px;
-    padding: 24px;
+    padding: 26px;
     border: 1px solid var(--panel-border);
     border-radius: 20px;
     background: var(--panel-bg);
@@ -191,7 +191,7 @@ body {
 .specialist-panel h2 {
     max-width: 680px;
     margin: 0 0 20px;
-    font-size: 24px;
+    font-size: 26px;
     line-height: 1.45;
 }
 
@@ -206,7 +206,11 @@ body {
 }
 
 .life-os-grid article {
-    padding: 16px;
+    display: grid;
+    align-content: space-between;
+    gap: 14px;
+    min-height: 210px;
+    padding: 18px;
     border: 1px solid var(--field-border);
     border-radius: 16px;
     background: var(--card-bg);
@@ -214,27 +218,41 @@ body {
 
 .life-os-grid span {
     display: block;
-    margin-bottom: 10px;
-    color: var(--muted);
-    font-size: 13px;
+    color: var(--text);
+    font-size: 16px;
     font-weight: 800;
 }
 
 .life-os-grid p {
-    min-height: 72px;
-    margin: 0 0 14px;
+    margin: 0;
     color: var(--subtle);
     line-height: 1.65;
 }
 
-.life-os-grid a {
-    color: var(--text);
+.life-os-grid a,
+.life-os-grid a:visited {
+    display: inline-flex;
+    width: fit-content;
+    align-items: center;
+    justify-content: center;
+    padding: 9px 13px;
+    border: 1px solid var(--field-border);
+    border-radius: 999px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 14px;
     font-weight: 800;
     text-decoration: none;
+    transition: transform 0.16s ease, opacity 0.16s ease;
+}
+
+.life-os-grid a:hover {
+    transform: translateY(-1px);
+    opacity: 0.92;
 }
 
 .specialist-grid {
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 .specialist-grid form {
@@ -243,8 +261,8 @@ body {
 
 .specialist-grid button {
     width: 100%;
-    min-height: 94px;
-    padding: 14px;
+    min-height: 104px;
+    padding: 18px;
     border: 1px solid var(--field-border);
     border-radius: 16px;
     background: var(--card-bg);
@@ -263,11 +281,15 @@ body {
 .specialist-grid span {
     display: block;
     margin-bottom: 8px;
+    font-size: 17px;
     font-weight: 850;
 }
 
 .specialist-grid small {
-    color: var(--muted);
+    display: block;
+    color: var(--subtle);
+    font-size: 14px;
+    line-height: 1.5;
 }
 
 .account-bar {
@@ -935,26 +957,49 @@ body {
 
     .life-os-panel,
     .specialist-panel {
+        margin-top: 22px;
         padding: 18px;
-        border-radius: 16px;
+        border-radius: 18px;
     }
 
     .life-os-panel h2,
     .specialist-panel h2 {
-        font-size: 20px;
+        margin-bottom: 16px;
+        font-size: 22px;
+        line-height: 1.45;
     }
 
     .life-os-grid,
     .specialist-grid {
         grid-template-columns: 1fr;
+        gap: 12px;
     }
 
-    .life-os-grid p {
+    .life-os-grid article {
         min-height: auto;
+        padding: 16px;
+    }
+
+    .life-os-grid span,
+    .specialist-grid span {
+        font-size: 16px;
+    }
+
+    .life-os-grid p,
+    .specialist-grid small {
+        min-height: auto;
+        font-size: 14px;
+    }
+
+    .life-os-grid a {
+        width: 100%;
+        box-sizing: border-box;
     }
 
     .specialist-grid button {
-        min-height: 76px;
+        min-height: 86px;
+        padding: 16px;
+        border-radius: 14px;
     }
 
     .home-nav a {
