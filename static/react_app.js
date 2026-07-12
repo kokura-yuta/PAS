@@ -664,24 +664,6 @@
                     )
                 )
                 : null,
-            h(
-                "section",
-                { className: "lesson-actions", "aria-label": "授業アクション" },
-                lessonActions.map(function (action) {
-                    return h(
-                        "button",
-                        {
-                            key: action.label,
-                            type: "button",
-                            onClick: function () {
-                                sendLessonAction(action);
-                            },
-                            disabled: sending || !chatData
-                        },
-                        action.label
-                    );
-                })
-            ),
             error ? h("p", { className: "notice" }, error) : null,
             h(
                 "section",
@@ -709,35 +691,57 @@
                     : null
             ),
             h(
-                "form",
-                { className: "study-chat-form", onSubmit: sendMessage },
-                h("label", { className: file ? "image-picker has-file" : "image-picker" },
-                    sending && file ? h("span", { className: "mini-spinner" }) : (file ? "選択中" : "写真"),
-                    h("input", {
-                        ref: fileInputRef,
-                        type: "file",
-                        accept: "image/*",
-                        onChange: function (event) {
-                            setFile(event.target.files && event.target.files[0] ? event.target.files[0] : null);
-                        },
-                        disabled: sending || !chatData
+                "div",
+                { className: "study-chat-controls" },
+                h(
+                    "section",
+                    { className: "lesson-actions", "aria-label": "授業アクション" },
+                    lessonActions.map(function (action) {
+                        return h(
+                            "button",
+                            {
+                                key: action.label,
+                                type: "button",
+                                onClick: function () {
+                                    sendLessonAction(action);
+                                },
+                                disabled: sending || !chatData
+                            },
+                            action.label
+                        );
                     })
                 ),
-                h("input", {
-                    type: "text",
-                    name: "message",
-                    placeholder: file ? "画像について聞きたいこと" : "分からないところを聞く",
-                    autoComplete: "off",
-                    value: message,
-                    onChange: function (event) {
-                        setMessage(event.target.value);
-                    },
-                    disabled: sending || !chatData
-                }),
                 h(
-                    "button",
-                    { type: "submit", disabled: sending || !chatData || (!message.trim() && !file) },
-                    sending ? h(LoadingLabel, { text: "送信中" }) : "送信"
+                    "form",
+                    { className: "study-chat-form", onSubmit: sendMessage },
+                    h("label", { className: file ? "image-picker has-file" : "image-picker" },
+                        sending && file ? h("span", { className: "mini-spinner" }) : (file ? "選択中" : "写真"),
+                        h("input", {
+                            ref: fileInputRef,
+                            type: "file",
+                            accept: "image/*",
+                            onChange: function (event) {
+                                setFile(event.target.files && event.target.files[0] ? event.target.files[0] : null);
+                            },
+                            disabled: sending || !chatData
+                        })
+                    ),
+                    h("input", {
+                        type: "text",
+                        name: "message",
+                        placeholder: file ? "画像について聞きたいこと" : "分からないところを聞く",
+                        autoComplete: "off",
+                        value: message,
+                        onChange: function (event) {
+                            setMessage(event.target.value);
+                        },
+                        disabled: sending || !chatData
+                    }),
+                    h(
+                        "button",
+                        { type: "submit", disabled: sending || !chatData || (!message.trim() && !file) },
+                        sending ? h(LoadingLabel, { text: "送信中" }) : "送信"
+                    )
                 )
             )
         );
