@@ -27,63 +27,25 @@
                     </div>
 
                     <nav class="menu-links">
-                        <a href="/chat">話してみる</a>
-                        <a href="/calendar">予定を管理する</a>
-                        <a href="/timeline">Timeline Memory</a>
-                        <a href="/memories">Core Memory</a>
+                        <a href="/calendar">予定</a>
+                        <a href="/timeline">Timeline</a>
+                        <a href="/memories">Memory</a>
                         <a href="/profile">プロフィール</a>
-                        <a href="/goals">目標管理</a>
+                        <a href="/goals">目標</a>
                         <a href="/settings">設定</a>
                     </nav>
 
                     <div class="menu-section">
-                        <p>Specialist PAS</p>
-                        <div class="menu-specialist-grid">
-                            <form method="post" action="/specialist_threads">
-                                <input type="hidden" name="thread_type" value="work">
-                                <button type="submit">Work</button>
-                            </form>
-                            <form method="post" action="/specialist_threads">
-                                <input type="hidden" name="thread_type" value="study">
-                                <button type="submit">Study</button>
-                            </form>
-                            <form method="post" action="/specialist_threads">
-                                <input type="hidden" name="thread_type" value="fitness">
-                                <button type="submit">Fitness</button>
-                            </form>
-                            <form method="post" action="/specialist_threads">
-                                <input type="hidden" name="thread_type" value="mental">
-                                <button type="submit">Mental</button>
+                        <p>会話</p>
+                        <div class="menu-conversation-actions">
+                            <a href="/chat">日記</a>
+                            <form method="post" action="/chat_threads">
+                                <input type="hidden" name="title" value="新しい会話">
+                                <input type="hidden" name="thread_type" value="custom">
+                                <button type="submit">新しい会話</button>
                             </form>
                         </div>
                     </div>
-
-                    <div class="menu-section">
-                        <p>新しいチャット</p>
-                        <form class="menu-thread-form" method="post" action="/chat_threads">
-                            <input type="text" name="title" placeholder="チャット名" autocomplete="off" maxlength="{{ thread_title_max_length }}" required>
-                            <input type="hidden" name="thread_type" value="custom">
-                            <button type="submit">作成</button>
-                        </form>
-                    </div>
-
-                    {% if chat_threads %}
-                        <div class="menu-section">
-                            <p>最近のチャット</p>
-                            <div class="menu-thread-links">
-                                {% for thread in chat_threads %}
-                                    {% if loop.index <= 5 %}
-                                        <a href="/chat/{{ thread.id }}">
-                                            <strong>{{ thread.display_title }}</strong>
-                                            {% if thread.display_title != thread.thread_type_label %}
-                                                <small>{{ thread.thread_type_label }}</small>
-                                            {% endif %}
-                                        </a>
-                                    {% endif %}
-                                {% endfor %}
-                            </div>
-                        </div>
-                    {% endif %}
 
                     <form class="menu-logout" method="post" action="/logout">
                         <button type="submit">ログアウト</button>
@@ -92,19 +54,13 @@
             </details>
         </header>
 
-        <section class="home-focus">
-            <p class="eyebrow">Today</p>
-            <h2>今日の予定</h2>
-            <p>まずは、今日だけ見る。必要なものは右上のメニューから開けます。</p>
-        </section>
-
         <section class="schedule-panel">
             <div class="schedule-header">
                 <div>
-                    <span>PAS Calendar</span>
-                    <h3>今日</h3>
+                    <span>Today</span>
+                    <h2>今日の予定</h2>
                 </div>
-                <a href="/calendar">予定を追加</a>
+                <a href="/calendar">追加</a>
             </div>
 
             {% if home_snapshot.today_events %}

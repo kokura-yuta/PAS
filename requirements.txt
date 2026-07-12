@@ -7,5 +7,3 @@ SQLAlchemy==2.0.51
 psycopg2-binary==2.9.12
 python-multipart==0.0.32
 itsdangerous==2.2.0
-google-api-python-client==2.187.0
-google-auth-oauthlib==1.2.3

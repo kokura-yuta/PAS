@@ -16,19 +16,6 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, 
 from sqlalchemy.exc import IntegrityError
 from datetime import datetime, timedelta
 
-try:
-    from google.oauth2.credentials import Credentials
-    from google_auth_oauthlib.flow import Flow
-    from google.auth.transport.requests import Request as GoogleAuthRequest
-    from googleapiclient.discovery import build
-    from googleapiclient.errors import HttpError
-except ImportError:
-    Credentials = None
-    Flow = None
-    GoogleAuthRequest = None
-    build = None
-    HttpError = Exception
-
 
 load_dotenv()
 
@@ -37,13 +24,6 @@ CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
 THREAD_TITLE_MAX_LENGTH = 50
 PASSWORD_MIN_LENGTH = 8
-APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
-GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
-GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI")
-GOOGLE_AUTH_URI = "https://accounts.google.com/o/oauth2/auth"
-GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
-CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
@@ -276,24 +256,11 @@ class TimelineMemory(Base):
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class CalendarAccount(Base):
-    __tablename__ = "calendar_accounts"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)
-    provider = Column(String(50), default="google")
-    token_json = Column(Text)
-    is_connected = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
 class CalendarEvent(Base):
     __tablename__ = "calendar_events"
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, index=True)
-    google_event_id = Column(String(255), index=True)
     title = Column(String(255))
     description = Column(Text)
     start_datetime = Column(DateTime)
@@ -345,7 +312,6 @@ def ensure_user_id_columns():
         "goals",
         "settings",
         "timeline_memories",
-        "calendar_accounts",
         "calendar_events"
     ]
 
@@ -467,7 +433,6 @@ def claim_unowned_data(user_id):
         "goals",
         "settings",
         "timeline_memories",
-        "calendar_accounts",
         "calendar_events"
     ]
 
@@ -1300,109 +1265,6 @@ def format_timeline_for_prompt(timeline_items):
     return timeline_text
 
 
-def calendar_config_ready():
-    return bool(
-        GOOGLE_CLIENT_ID
-        and GOOGLE_CLIENT_SECRET
-        and GOOGLE_REDIRECT_URI
-        and Flow
-        and Credentials
-        and build
-    )
-
-
-def get_calendar_redirect_uri(request):
-    if GOOGLE_REDIRECT_URI:
-        return GOOGLE_REDIRECT_URI
-
-    return str(request.url_for("google_calendar_callback"))
-
-
-def build_google_calendar_flow(request):
-    if not calendar_config_ready():
-        return None
-
-    client_config = {
-        "web": {
-            "client_id": GOOGLE_CLIENT_ID,
-            "client_secret": GOOGLE_CLIENT_SECRET,
-            "auth_uri": GOOGLE_AUTH_URI,
-            "token_uri": GOOGLE_TOKEN_URI,
-            "redirect_uris": [get_calendar_redirect_uri(request)]
-        }
-    }
-
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=CALENDAR_SCOPES,
-        redirect_uri=get_calendar_redirect_uri(request)
-    )
-
-    return flow
-
-
-def load_calendar_account(user_id):
-    db = SessionLocal()
-
-    try:
-        return (
-            db.query(CalendarAccount)
-            .filter(CalendarAccount.user_id == user_id)
-            .filter(CalendarAccount.provider == "google")
-            .filter(CalendarAccount.is_connected.is_(True))
-            .first()
-        )
-    finally:
-        db.close()
-
-
-def save_calendar_credentials(user_id, credentials):
-    db = SessionLocal()
-
-    try:
-        account = (
-            db.query(CalendarAccount)
-            .filter(CalendarAccount.user_id == user_id)
-            .filter(CalendarAccount.provider == "google")
-            .first()
-        )
-
-        if account is None:
-            account = CalendarAccount(user_id=user_id, provider="google")
-            db.add(account)
-
-        account.token_json = credentials.to_json()
-        account.is_connected = True
-        account.updated_at = datetime.utcnow()
-        db.commit()
-    finally:
-        db.close()
-
-
-def build_calendar_service(user_id):
-    account = load_calendar_account(user_id)
-
-    if not calendar_config_ready():
-        return None, "Google Calendar連携の環境変数またはライブラリが未設定です。"
-
-    if account is None or not account.token_json:
-        return None, "Google Calendarがまだ接続されていません。"
-
-    credentials = Credentials.from_authorized_user_info(
-        json.loads(account.token_json),
-        CALENDAR_SCOPES
-    )
-
-    if credentials.expired and credentials.refresh_token:
-        credentials.refresh(GoogleAuthRequest())
-        save_calendar_credentials(user_id, credentials)
-
-    if not credentials.valid:
-        return None, "Google Calendarの認証が切れています。もう一度接続してください。"
-
-    return build("calendar", "v3", credentials=credentials), ""
-
-
 def save_local_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
     title = (title or "").strip()
     description = (description or "").strip()
@@ -1421,7 +1283,6 @@ def save_local_calendar_event(user_id, title, description, start_datetime, end_d
     try:
         calendar_event = CalendarEvent(
             user_id=user_id,
-            google_event_id=None,
             title=title,
             description=description,
             start_datetime=start_value,
@@ -1434,112 +1295,6 @@ def save_local_calendar_event(user_id, title, description, start_datetime, end_d
         return True, "PAS内の予定として保存しました。"
     finally:
         db.close()
-
-
-def upsert_calendar_event(user_id, event):
-    google_event_id = event.get("id")
-
-    if not google_event_id:
-        return
-
-    start_value = event.get("start", {}).get("dateTime") or event.get("start", {}).get("date")
-    end_value = event.get("end", {}).get("dateTime") or event.get("end", {}).get("date")
-
-    db = SessionLocal()
-
-    try:
-        calendar_event = (
-            db.query(CalendarEvent)
-            .filter(CalendarEvent.user_id == user_id)
-            .filter(CalendarEvent.google_event_id == google_event_id)
-            .first()
-        )
-
-        if calendar_event is None:
-            calendar_event = CalendarEvent(
-                user_id=user_id,
-                google_event_id=google_event_id
-            )
-            db.add(calendar_event)
-
-        calendar_event.title = event.get("summary", "無題の予定")
-        calendar_event.description = event.get("description", "")
-        calendar_event.start_datetime = parse_datetime_value(start_value)
-        calendar_event.end_datetime = parse_datetime_value(end_value)
-        calendar_event.location = event.get("location", "")
-        calendar_event.updated_at = datetime.utcnow()
-        db.commit()
-    finally:
-        db.close()
-
-
-def sync_google_calendar_events(user_id):
-    service, error = build_calendar_service(user_id)
-
-    if error:
-        return False, error
-
-    now = datetime.utcnow()
-    time_min = now.isoformat() + "Z"
-    time_max = (now + timedelta(days=90)).isoformat() + "Z"
-
-    try:
-        events_result = service.events().list(
-            calendarId="primary",
-            timeMin=time_min,
-            timeMax=time_max,
-            maxResults=100,
-            singleEvents=True,
-            orderBy="startTime"
-        ).execute()
-    except HttpError:
-        return False, "Google Calendarの予定取得に失敗しました。"
-
-    events = events_result.get("items", [])
-
-    for event in events:
-        upsert_calendar_event(user_id, event)
-
-    return True, f"{len(events)}件の予定を同期しました。"
-
-
-def create_google_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
-    title = (title or "").strip()
-    start_datetime = (start_datetime or "").strip()
-    end_datetime = (end_datetime or "").strip()
-
-    if not title or not start_datetime or not end_datetime:
-        return False, "予定名、開始日時、終了日時を入力してください。"
-
-    service, error = build_calendar_service(user_id)
-
-    if error:
-        return False, error
-
-    event_body = {
-        "summary": title,
-        "description": description,
-        "location": location,
-        "start": {
-            "dateTime": start_datetime,
-            "timeZone": APP_TIMEZONE
-        },
-        "end": {
-            "dateTime": end_datetime,
-            "timeZone": APP_TIMEZONE
-        }
-    }
-
-    try:
-        created_event = service.events().insert(
-            calendarId="primary",
-            body=event_body
-        ).execute()
-    except HttpError:
-        return False, "Google Calendarへの予定作成に失敗しました。"
-
-    upsert_calendar_event(user_id, created_event)
-    return True, "予定を作成しました。"
 
 
 def create_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
@@ -1584,7 +1339,6 @@ def update_calendar_event(user_id, calendar_event_id, title, description, start_
         calendar_event.start_datetime = start_value
         calendar_event.end_datetime = end_value
         calendar_event.location = location
-        calendar_event.google_event_id = None
         calendar_event.updated_at = datetime.utcnow()
         db.commit()
         return True, "予定を更新しました。"
@@ -1605,39 +1359,6 @@ def delete_calendar_event(user_id, calendar_event_id):
 
         if calendar_event is None:
             return False, "予定が見つかりません。"
-
-        db.delete(calendar_event)
-        db.commit()
-        return True, "予定を削除しました。"
-    finally:
-        db.close()
-
-
-def delete_google_calendar_event(user_id, calendar_event_id):
-    db = SessionLocal()
-
-    try:
-        calendar_event = (
-            db.query(CalendarEvent)
-            .filter(CalendarEvent.user_id == user_id)
-            .filter(CalendarEvent.id == calendar_event_id)
-            .first()
-        )
-
-        if calendar_event is None:
-            return False, "予定が見つかりません。"
-
-        google_event_id = calendar_event.google_event_id
-        service, error = build_calendar_service(user_id)
-
-        if not error and google_event_id:
-            try:
-                service.events().delete(
-                    calendarId="primary",
-                    eventId=google_event_id
-                ).execute()
-            except HttpError:
-                return False, "Google Calendarの予定削除に失敗しました。"
 
         db.delete(calendar_event)
         db.commit()
@@ -2634,36 +2355,6 @@ def calendar_page(request: Request):
             "message": request.query_params.get("message", "")
         }
     )
-
-
-@app.get("/calendar/connect")
-def google_calendar_connect(request: Request):
-    current_user = get_current_user(request)
-
-    if current_user is None:
-        return RedirectResponse(url="/login", status_code=303)
-
-    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
-
-
-@app.get("/calendar/callback")
-def google_calendar_callback(request: Request):
-    current_user = get_current_user(request)
-
-    if current_user is None:
-        return RedirectResponse(url="/login", status_code=303)
-
-    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
-
-
-@app.post("/calendar/sync")
-def calendar_sync(request: Request):
-    current_user = get_current_user(request)
-
-    if current_user is None:
-        return RedirectResponse(url="/login", status_code=303)
-
-    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
 
 
 @app.post("/calendar/events")

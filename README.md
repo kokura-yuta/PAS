@@ -73,7 +73,6 @@ uvicorn main:app --reload
 OPENAI_API_KEY=your_openai_api_key
 DATABASE_URL=your_postgresql_url
 SESSION_SECRET_KEY=your_session_secret_key
-APP_TIMEZONE=Asia/Tokyo
 ```
 
 ## Render設定
