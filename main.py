@@ -33,6 +33,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260712-1")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -2636,14 +2637,18 @@ templates = Jinja2Templates(directory="templates")
 def render_react_app(request, current_user):
     settings = load_settings(current_user.id)
 
-    return templates.TemplateResponse(
+    response = templates.TemplateResponse(
         request=request,
         name="react_app.html",
         context={
             "settings": settings,
-            "current_user": current_user
+            "current_user": current_user,
+            "asset_version": ASSET_VERSION
         }
     )
+
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @app.get("/signup")
