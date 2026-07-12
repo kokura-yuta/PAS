@@ -46,6 +46,21 @@ GOOGLE_TOKEN_URI = "https://oauth2.googleapis.com/token"
 CALENDAR_SCOPES = ["https://www.googleapis.com/auth/calendar"]
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
+WORK_THREAD_TYPE = "work"
+STUDY_THREAD_TYPE = "study"
+FITNESS_THREAD_TYPE = "fitness"
+MENTAL_THREAD_TYPE = "mental"
+FINANCE_THREAD_TYPE = "finance"
+HEALTH_THREAD_TYPE = "health"
+SPECIALIST_THREAD_TYPES = {
+    WORK_THREAD_TYPE,
+    STUDY_THREAD_TYPE,
+    FITNESS_THREAD_TYPE,
+    MENTAL_THREAD_TYPE,
+    FINANCE_THREAD_TYPE,
+    HEALTH_THREAD_TYPE
+}
+CREATABLE_THREAD_TYPES = SPECIALIST_THREAD_TYPES | {CUSTOM_THREAD_TYPE}
 TIMELINE_LABELS = {
     "past": "過去",
     "present": "現在",
@@ -53,7 +68,13 @@ TIMELINE_LABELS = {
 }
 THREAD_TYPE_LABELS = {
     DIARY_THREAD_TYPE: "日記",
-    CUSTOM_THREAD_TYPE: "自由チャット"
+    CUSTOM_THREAD_TYPE: "自由チャット",
+    WORK_THREAD_TYPE: "Work PAS",
+    STUDY_THREAD_TYPE: "Study PAS",
+    FITNESS_THREAD_TYPE: "Fitness PAS",
+    MENTAL_THREAD_TYPE: "Mental PAS",
+    FINANCE_THREAD_TYPE: "Finance PAS",
+    HEALTH_THREAD_TYPE: "Health PAS"
 }
 MEMORY_SOURCE_LABELS = {
     "user_statement": "本人発言",
@@ -89,7 +110,38 @@ def get_thread_description(thread_type):
     if thread_type == DIARY_THREAD_TYPE:
         return "今日あったことや、誰にも話せない気持ちを自由に話してください。文章をきれいにまとめる必要はありません。"
 
+    if thread_type == WORK_THREAD_TYPE:
+        return "就活、面接、ES、キャリア設計を、あなたの目標や予定とつなげて整理します。"
+
+    if thread_type == STUDY_THREAD_TYPE:
+        return "勉強、資格、大学、学習計画を、今の理解度と目標に合わせて支援します。"
+
+    if thread_type == FITNESS_THREAD_TYPE:
+        return "筋トレ、食事、睡眠、継続を、生活状況に合わせて無理なく整えます。"
+
+    if thread_type == MENTAL_THREAD_TYPE:
+        return "感情整理、ストレス、不安、自己理解を、急がず一緒に言葉にします。"
+
+    if thread_type == FINANCE_THREAD_TYPE:
+        return "お金、貯金、支出、将来設計を、現実的な行動に落とし込みます。"
+
+    if thread_type == HEALTH_THREAD_TYPE:
+        return "体調、睡眠、生活習慣、通院予定を、無理なく続けられる形に整えます。"
+
     return "テーマごとにPASと話せる自由チャットです。相談、整理、アイデア出しに使えます。"
+
+
+def get_specialist_thread_title(thread_type):
+    titles = {
+        WORK_THREAD_TYPE: "Work PAS",
+        STUDY_THREAD_TYPE: "Study PAS",
+        FITNESS_THREAD_TYPE: "Fitness PAS",
+        MENTAL_THREAD_TYPE: "Mental PAS",
+        FINANCE_THREAD_TYPE: "Finance PAS",
+        HEALTH_THREAD_TYPE: "Health PAS"
+    }
+
+    return titles.get(thread_type, "新しいチャット")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "dev-session-secret-change-me")
@@ -483,7 +535,12 @@ def load_chat_threads(user_id):
         )
 
         def sort_thread(thread):
-            thread_order = 0 if thread.thread_type == DIARY_THREAD_TYPE else 1
+            if thread.thread_type == DIARY_THREAD_TYPE:
+                thread_order = 0
+            elif thread.thread_type in SPECIALIST_THREAD_TYPES:
+                thread_order = 1
+            else:
+                thread_order = 2
             updated_at = thread.updated_at or thread.created_at or datetime.utcnow()
             return (thread_order, -updated_at.timestamp())
 
@@ -510,7 +567,7 @@ def load_chat_threads(user_id):
                 "description": description,
                 "latest_message": truncate_text(latest_text, 54),
                 "updated_at_text": format_datetime(thread.updated_at or thread.created_at),
-                "can_delete": thread.thread_type == CUSTOM_THREAD_TYPE
+                "can_delete": thread.thread_type != DIARY_THREAD_TYPE
             })
 
         return thread_items
@@ -518,8 +575,9 @@ def load_chat_threads(user_id):
         db.close()
 
 
-def create_chat_thread(title, user_id):
+def create_chat_thread(title, user_id, thread_type=CUSTOM_THREAD_TYPE):
     clean_title = truncate_text(title, THREAD_TITLE_MAX_LENGTH)
+    thread_type = thread_type if thread_type in CREATABLE_THREAD_TYPES else CUSTOM_THREAD_TYPE
 
     if not clean_title:
         return None
@@ -530,7 +588,7 @@ def create_chat_thread(title, user_id):
         thread = ChatThread(
             user_id=user_id,
             title=clean_title,
-            thread_type=CUSTOM_THREAD_TYPE
+            thread_type=thread_type
         )
 
         db.add(thread)
@@ -553,7 +611,7 @@ def delete_chat_thread(thread_id, user_id):
             .first()
         )
 
-        if thread is None or thread.thread_type != CUSTOM_THREAD_TYPE:
+        if thread is None or thread.thread_type == DIARY_THREAD_TYPE:
             return
 
         db.query(ChatMessage).filter(ChatMessage.user_id == user_id).filter(ChatMessage.thread_id == thread_id).delete()
@@ -1580,6 +1638,7 @@ def format_calendar_for_prompt(calendar_items):
 def load_home_snapshot(user_id):
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = today_start + timedelta(days=1)
+    next_week_end = today_start + timedelta(days=7)
 
     db = SessionLocal()
 
@@ -1600,6 +1659,16 @@ def load_home_snapshot(user_id):
             .filter(Goal.status == "active")
             .order_by(Goal.created_at.desc())
             .limit(3)
+            .all()
+        )
+
+        upcoming_events = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.start_datetime >= today_end)
+            .filter(CalendarEvent.start_datetime < next_week_end)
+            .order_by(CalendarEvent.start_datetime.asc())
+            .limit(2)
             .all()
         )
 
@@ -1638,6 +1707,14 @@ def load_home_snapshot(user_id):
             }
             for event in today_events
         ]
+        upcoming_event_items = [
+            {
+                "title": event.title,
+                "time": format_datetime(event.start_datetime),
+                "location": event.location
+            }
+            for event in upcoming_events
+        ]
         goal_items = [
             {
                 "title": goal.title,
@@ -1661,13 +1738,28 @@ def load_home_snapshot(user_id):
         else:
             daily_message = "今日は何から整える？短くでいいから話してみて。"
 
+        goal_planner_text = "目標ができたら、PASが今日の一歩まで分解します。"
+
+        if goal_items:
+            goal_planner_text = f"まずは「{goal_items[0]['title']}」を15分で進む形に分けよう。"
+
+        event_coach_text = "予定を入れると、前日・当日・終了後の振り返りに使えます。"
+
+        if today_event_items:
+            event_coach_text = f"今日は「{today_event_items[0]['title']}」の前後で整えよう。"
+        elif upcoming_event_items:
+            event_coach_text = f"次は「{upcoming_event_items[0]['title']}」。準備と振り返りを残せます。"
+
         return {
             "daily_message": daily_message,
             "today_events": today_event_items,
+            "upcoming_events": upcoming_event_items,
             "active_goals": goal_items,
             "key_memories": memory_items,
             "timeline_items": timeline_texts,
-            "pending_memory_count": pending_memory_count
+            "pending_memory_count": pending_memory_count,
+            "goal_planner_text": goal_planner_text,
+            "event_coach_text": event_coach_text
         }
     finally:
         db.close()
@@ -1803,12 +1895,16 @@ RESPONSE_LENGTH_PROMPTS = {
 
 PAS_RESPONSE_RULES = """
 返答の基本方針:
+- PASは「世界で一番その人を理解するAI」を目指す、人生に寄り添うパートナーです。
+- ChatGPTのような説明役に寄りすぎず、まず会話相手として自然に返してください。
 - その場のノリだけで返さず、ユーザーの状況・目標・過去の情報を踏まえて返してください。
 - まず会話として自然に返してください。説明文・レポート・箇条書きに寄りすぎないでください。
 - ユーザーの発言が軽い時は自然に短く返してください。
+- 返信の最初の1文は、相づち・共感・結論のどれかにしてください。前置きは不要です。
 - 決めつけは避け、情報が足りない時は質問してください。
 - アドバイスより先に、共感か確認質問を優先してください。
 - 1回の返信で質問は原則1つだけにしてください。
+- 短い発言には短く返してください。短い雑談に長文で返すのは禁止です。
 
 相談・意思決定への返答:
 1. 気持ちを短く受け止める
@@ -1842,6 +1938,54 @@ def build_thread_prompt(thread_title, thread_type):
 このチャットは日記チャットです。
 ユーザーの感情や出来事を受け止めることを優先してください。
 ユーザーが明確にアドバイスを求めていない場合、すぐに解決策を押しつけず、共感と短い質問を中心にしてください。
+"""
+
+    if thread_type == WORK_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはWork PASです。
+就活・面接・ES・キャリア設計を支援してください。
+Core Memory、目標、Timeline、Calendarから、今の状況に合う次の一歩を出してください。
+"""
+
+    if thread_type == STUDY_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはStudy PASです。
+学習計画・資格・理解度・復習を支援してください。
+やる気論だけでなく、今日できる勉強行動まで小さく分けてください。
+"""
+
+    if thread_type == FITNESS_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはFitness PASです。
+筋トレ・食事・睡眠・継続を支援してください。
+無理な追い込みではなく、生活状況に合わせた現実的な提案をしてください。
+"""
+
+    if thread_type == MENTAL_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはMental PASです。
+感情整理・ストレス・不安・自己理解を支援してください。
+診断や断定は避け、安心して話せる短い返答を優先してください。
+"""
+
+    if thread_type == FINANCE_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはFinance PASです。
+家計・貯金・支出・将来設計を支援してください。
+リスクのある金融助言は断定せず、整理と行動の小さな一歩を中心にしてください。
+"""
+
+    if thread_type == HEALTH_THREAD_TYPE:
+        return f"""
+現在のチャット: {thread_title}
+このチャットはHealth PASです。
+体調・睡眠・生活習慣・通院予定の整理を支援してください。
+医療判断の断定は避け、必要な場合は専門家への相談を促しながら、生活の小さな改善に落とし込んでください。
 """
 
     return f"""
@@ -2123,7 +2267,7 @@ def home(request: Request):
     )
 
 @app.get("/chat")
-def chat_page(request: Request):
+def chat_page(request: Request, draft: str = ""):
     current_user = get_current_user(request)
 
     if current_user is None:
@@ -2143,12 +2287,13 @@ def chat_page(request: Request):
             "thread_title": diary_thread.title,
             "thread_description": get_thread_description(diary_thread.thread_type),
             "thread_type_label": get_thread_type_label(diary_thread.thread_type),
-            "can_delete_thread": False
+            "can_delete_thread": False,
+            "draft_message": draft
         }
     )
 
 @app.get("/chat/{thread_id}")
-def chat_thread_page(request: Request, thread_id: int):
+def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
     current_user = get_current_user(request)
 
     if current_user is None:
@@ -2172,12 +2317,17 @@ def chat_thread_page(request: Request, thread_id: int):
             "thread_title": thread.title,
             "thread_description": get_thread_description(thread.thread_type),
             "thread_type_label": get_thread_type_label(thread.thread_type),
-            "can_delete_thread": thread.thread_type == CUSTOM_THREAD_TYPE
+            "can_delete_thread": thread.thread_type != DIARY_THREAD_TYPE,
+            "draft_message": draft
         }
     )
 
 @app.post("/chat_threads")
-def chat_thread_create(request: Request, title: str = Form("")):
+def chat_thread_create(
+    request: Request,
+    title: str = Form(""),
+    thread_type: str = Form(CUSTOM_THREAD_TYPE)
+):
     current_user = get_current_user(request)
 
     if current_user is None:
@@ -2188,7 +2338,29 @@ def chat_thread_create(request: Request, title: str = Form("")):
     if not clean_title:
         return RedirectResponse(url="/", status_code=303)
 
-    thread = create_chat_thread(clean_title, current_user.id)
+    thread = create_chat_thread(clean_title, current_user.id, thread_type)
+
+    if thread is None:
+        return RedirectResponse(url="/", status_code=303)
+
+    return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
+
+
+@app.post("/specialist_threads")
+def specialist_thread_create(request: Request, thread_type: str = Form(CUSTOM_THREAD_TYPE)):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    if thread_type not in SPECIALIST_THREAD_TYPES:
+        return RedirectResponse(url="/", status_code=303)
+
+    thread = create_chat_thread(
+        title=get_specialist_thread_title(thread_type),
+        user_id=current_user.id,
+        thread_type=thread_type
+    )
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
@@ -2671,7 +2843,7 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
             "thread_title": thread.title,
             "thread_description": get_thread_description(thread.thread_type),
             "thread_type_label": get_thread_type_label(thread.thread_type),
-            "can_delete_thread": thread.thread_type == CUSTOM_THREAD_TYPE
+            "can_delete_thread": thread.thread_type != DIARY_THREAD_TYPE
             }
     )
 

@@ -36,6 +36,13 @@
             <p class="eyebrow">Today</p>
             <h2>{{ home_snapshot.daily_message }}</h2>
 
+            <div class="daily-actions">
+                <a href="/chat?draft=今日の予定と目標を一緒に確認したい">Daily Check-in</a>
+                <a href="/chat?draft=今日の出来事を振り返りたい">今日の振り返り</a>
+                <a href="/chat?draft=次の予定に向けて準備を一緒にしたい">Event Coach</a>
+                <a href="/chat?draft=今の目標を分解して今日やることを決めたい">Goal Planner</a>
+            </div>
+
             <div class="today-grid">
                 <div>
                     <h3>今日の予定</h3>
@@ -60,6 +67,17 @@
                 </div>
 
                 <div>
+                    <h3>次の予定</h3>
+                    {% if home_snapshot.upcoming_events %}
+                        {% for event in home_snapshot.upcoming_events %}
+                            <p>{{ event.time }} {{ event.title }}</p>
+                        {% endfor %}
+                    {% else %}
+                        <p>{{ home_snapshot.event_coach_text }}</p>
+                    {% endif %}
+                </div>
+
+                <div>
                     <h3>PASが覚えていること</h3>
                     {% if home_snapshot.pending_memory_count %}
                         <a class="inline-notice-link" href="/memories">
@@ -77,11 +95,78 @@
             </div>
         </section>
 
+        <section class="life-os-panel">
+            <div>
+                <p class="eyebrow">Life OS</p>
+                <h2>今日の自分を、予定・目標・記憶から整える。</h2>
+            </div>
+
+            <div class="life-os-grid">
+                <article>
+                    <span>Goal Planner AI</span>
+                    <p>{{ home_snapshot.goal_planner_text }}</p>
+                    <a href="/chat?draft=今の目標を分解して、今日やることを一緒に決めたい">計画する</a>
+                </article>
+
+                <article>
+                    <span>Event Coach AI</span>
+                    <p>{{ home_snapshot.event_coach_text }}</p>
+                    <a href="/chat?draft=次の予定に向けて、準備と振り返りを一緒にしたい">伴走する</a>
+                </article>
+
+                <article>
+                    <span>Core Memory</span>
+                    <p>確認待ちの記憶を整理すると、PASの理解が少しずつ深くなります。</p>
+                    <a href="/memories">記憶を見る</a>
+                </article>
+            </div>
+        </section>
+
+        <section class="specialist-panel">
+            <div>
+                <p class="eyebrow">Specialist PAS</p>
+                <h2>Core Memoryを共有する、あなた専用の専門AI。</h2>
+            </div>
+
+            <div class="specialist-grid">
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="work">
+                    <button type="submit"><span>Work PAS</span><small>就活・キャリア</small></button>
+                </form>
+
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="study">
+                    <button type="submit"><span>Study PAS</span><small>勉強・資格</small></button>
+                </form>
+
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="fitness">
+                    <button type="submit"><span>Fitness PAS</span><small>筋トレ・睡眠</small></button>
+                </form>
+
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="mental">
+                    <button type="submit"><span>Mental PAS</span><small>感情整理</small></button>
+                </form>
+
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="finance">
+                    <button type="submit"><span>Finance PAS</span><small>お金・貯金</small></button>
+                </form>
+
+                <form method="post" action="/specialist_threads">
+                    <input type="hidden" name="thread_type" value="health">
+                    <button type="submit"><span>Health PAS</span><small>体調・生活習慣</small></button>
+                </form>
+            </div>
+        </section>
+
         <section class="thread-list">
             <h2>チャット</h2>
 
             <form class="thread-form" method="post" action="/chat_threads">
                 <input type="text" name="title" placeholder="新しいチャット名" autocomplete="off" maxlength="{{ thread_title_max_length }}" required>
+                <input type="hidden" name="thread_type" value="custom">
                 <button type="submit">作成</button>
             </form>
 

@@ -1,9 +1,9 @@
 :root {
-    --bg: #f5f5f7;
-    --text: #1f2933;
+    --bg: #f6f6f3;
+    --text: #20242b;
     --muted: #6b7280;
     --subtle: #4b5563;
-    --accent: #1f2933;
+    --accent: #20242b;
     --accent-text: #ffffff;
     --field-bg: rgba(255, 255, 255, 0.82);
     --field-border: rgba(31, 41, 51, 0.14);
@@ -65,6 +65,7 @@ body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", system-ui, sans-serif;
     background: var(--bg);
     color: var(--text);
+    letter-spacing: 0;
 }
 
 .home-nav a {
@@ -75,7 +76,7 @@ body {
     text-decoration: none;
     background: var(--accent);
     color: var(--accent-text);
-    border-radius: 999px;
+    border-radius: 12px;
     box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
     transition: transform 0.16s ease, opacity 0.16s ease;
 }
@@ -86,9 +87,9 @@ body {
 }
 .home {
     min-height: 100vh;
-    max-width: 960px;
+    max-width: 1040px;
     margin: 0 auto;
-    padding: 48px 24px;
+    padding: 48px 24px 72px;
 }
 
 .home-hero {
@@ -113,10 +114,10 @@ body {
 
 .today-panel {
     margin-top: 38px;
-    max-width: 860px;
+    max-width: 100%;
     padding: 24px;
     border: 1px solid var(--panel-border);
-    border-radius: 18px;
+    border-radius: 20px;
     background: var(--panel-bg);
     box-shadow: var(--panel-shadow);
 }
@@ -130,13 +131,13 @@ body {
 
 .today-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
     gap: 16px;
 }
 
 .today-grid > div {
     padding: 16px;
-    border-radius: 14px;
+    border-radius: 16px;
     background: var(--card-bg);
     border: 1px solid var(--field-border);
 }
@@ -150,6 +151,123 @@ body {
     margin: 8px 0 0;
     color: var(--subtle);
     line-height: 1.6;
+}
+
+.daily-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin: 0 0 20px;
+}
+
+.daily-actions a {
+    padding: 9px 12px;
+    border: 1px solid var(--field-border);
+    border-radius: 999px;
+    background: var(--card-bg);
+    color: var(--text);
+    font-size: 14px;
+    font-weight: 700;
+    text-decoration: none;
+    transition: transform 0.16s ease, border-color 0.16s ease;
+}
+
+.daily-actions a:hover {
+    transform: translateY(-1px);
+    border-color: var(--muted);
+}
+
+.life-os-panel,
+.specialist-panel {
+    margin-top: 28px;
+    padding: 24px;
+    border: 1px solid var(--panel-border);
+    border-radius: 20px;
+    background: var(--panel-bg);
+    box-shadow: var(--panel-shadow);
+}
+
+.life-os-panel h2,
+.specialist-panel h2 {
+    max-width: 680px;
+    margin: 0 0 20px;
+    font-size: 24px;
+    line-height: 1.45;
+}
+
+.life-os-grid,
+.specialist-grid {
+    display: grid;
+    gap: 14px;
+}
+
+.life-os-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.life-os-grid article {
+    padding: 16px;
+    border: 1px solid var(--field-border);
+    border-radius: 16px;
+    background: var(--card-bg);
+}
+
+.life-os-grid span {
+    display: block;
+    margin-bottom: 10px;
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.life-os-grid p {
+    min-height: 72px;
+    margin: 0 0 14px;
+    color: var(--subtle);
+    line-height: 1.65;
+}
+
+.life-os-grid a {
+    color: var(--text);
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.specialist-grid {
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.specialist-grid form {
+    margin: 0;
+}
+
+.specialist-grid button {
+    width: 100%;
+    min-height: 94px;
+    padding: 14px;
+    border: 1px solid var(--field-border);
+    border-radius: 16px;
+    background: var(--card-bg);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: transform 0.16s ease, border-color 0.16s ease;
+}
+
+.specialist-grid button:hover {
+    transform: translateY(-1px);
+    border-color: var(--muted);
+}
+
+.specialist-grid span {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 850;
+}
+
+.specialist-grid small {
+    color: var(--muted);
 }
 
 .account-bar {
@@ -808,6 +926,35 @@ body {
 
     .today-grid {
         grid-template-columns: 1fr;
+    }
+
+    .daily-actions a {
+        flex: 1 1 calc(50% - 10px);
+        text-align: center;
+    }
+
+    .life-os-panel,
+    .specialist-panel {
+        padding: 18px;
+        border-radius: 16px;
+    }
+
+    .life-os-panel h2,
+    .specialist-panel h2 {
+        font-size: 20px;
+    }
+
+    .life-os-grid,
+    .specialist-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .life-os-grid p {
+        min-height: auto;
+    }
+
+    .specialist-grid button {
+        min-height: 76px;
     }
 
     .home-nav a {

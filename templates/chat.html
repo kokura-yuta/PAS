@@ -50,7 +50,7 @@
         </section>
 
         <form class="chat-form" method="post" action="/chat/{{ thread_id }}">
-            <input type="text" name="message" placeholder="メッセージを入力..." autocomplete="off" required>
+            <input type="text" name="message" placeholder="メッセージを入力..." autocomplete="off" value="{{ draft_message if draft_message else '' }}" required>
             <button type="submit">送信</button>
         </form>
 
