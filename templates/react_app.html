@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Study PAS</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body class="theme-{{ settings.theme_name }}">
     <div id="pas-react-root">
@@ -23,6 +23,6 @@
     </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-    <script src="/static/react_app.js"></script>
+    <script src="/static/react_app.js?v={{ asset_version }}"></script>
 </body>
 </html>
