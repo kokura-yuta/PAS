@@ -36,6 +36,7 @@
         const [transitionMessage, setTransitionMessage] = useState("");
         const routeRef = useRef(window.location.pathname);
         const transitionTimerRef = useRef(null);
+        const lastHapticAtRef = useRef(0);
 
         useEffect(function () {
             function handlePopState() {
@@ -47,9 +48,34 @@
                 });
             }
 
+            function handlePointerDown(event) {
+                const target = event.target.closest(
+                    "button, summary, a, .image-picker, .study-history-row, .study-thread-card"
+                );
+                const root = document.getElementById("pas-react-root");
+                const now = Date.now();
+
+                if (!target || !root || !root.contains(target)) {
+                    return;
+                }
+
+                if (target.disabled || target.getAttribute("aria-disabled") === "true") {
+                    return;
+                }
+
+                if (now - lastHapticAtRef.current < 120) {
+                    return;
+                }
+
+                lastHapticAtRef.current = now;
+                triggerSoftHaptic();
+            }
+
             window.addEventListener("popstate", handlePopState);
+            document.addEventListener("pointerdown", handlePointerDown, { passive: true });
             return function () {
                 window.removeEventListener("popstate", handlePopState);
+                document.removeEventListener("pointerdown", handlePointerDown);
                 if (transitionTimerRef.current) {
                     window.clearTimeout(transitionTimerRef.current);
                 }
@@ -129,6 +155,14 @@
             h("span", { className: "mini-spinner" }),
             text
         );
+    }
+
+    function triggerSoftHaptic() {
+        if (!window.navigator || typeof window.navigator.vibrate !== "function") {
+            return;
+        }
+
+        window.navigator.vibrate(8);
     }
 
     function ThinkingBubble({ label }) {
