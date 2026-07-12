@@ -181,7 +181,7 @@ body:has(.study-app) {
 
 .subject-form button,
 .study-chat-form button {
-    min-width: 88px;
+    min-width: 132px;
     height: 48px;
     padding: 0 18px;
     border: 0;
@@ -192,6 +192,107 @@ body:has(.study-app) {
     font-size: 15px;
     font-weight: 800;
     cursor: pointer;
+}
+
+.continue-card {
+    display: grid;
+    gap: 18px;
+    padding: 24px;
+    border: 1px solid var(--study-line);
+    border-radius: 24px;
+    background: var(--study-surface-strong);
+    box-shadow: 0 18px 54px rgba(21, 23, 25, 0.08);
+}
+
+.continue-main {
+    display: grid;
+    gap: 8px;
+}
+
+.continue-main span {
+    color: var(--study-muted);
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.continue-main strong {
+    font-size: 28px;
+    line-height: 1.35;
+}
+
+.continue-card button {
+    justify-self: start;
+    min-height: 46px;
+    padding: 0 18px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-accent);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.study-history-section,
+.teacher-memory-card {
+    display: grid;
+    gap: 10px;
+}
+
+.study-history-list {
+    display: grid;
+    gap: 0;
+    border-top: 1px solid var(--study-line);
+}
+
+.study-history-row {
+    display: grid;
+    grid-template-columns: 78px 120px 1fr;
+    gap: 14px;
+    width: 100%;
+    padding: 16px 0;
+    border: 0;
+    border-bottom: 1px solid var(--study-line);
+    background: transparent;
+    color: var(--study-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.study-history-row span {
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.study-history-row strong {
+    font-size: 16px;
+}
+
+.study-history-row small {
+    color: var(--study-muted);
+    font-size: 14px;
+    line-height: 1.45;
+}
+
+.teacher-memory-card {
+    padding: 20px 0;
+    border-top: 1px solid var(--study-line);
+    border-bottom: 1px solid var(--study-line);
+}
+
+.teacher-memory-card ul {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.teacher-memory-card li {
+    color: var(--study-muted);
+    line-height: 1.7;
 }
 
 .subject-chips {
@@ -457,6 +558,24 @@ body:has(.study-app) {
     .subject-form button {
         width: 100%;
         box-sizing: border-box;
+    }
+
+    .continue-card {
+        padding: 20px;
+        border-radius: 20px;
+    }
+
+    .continue-main strong {
+        font-size: 23px;
+    }
+
+    .study-history-row {
+        grid-template-columns: 64px 1fr;
+        gap: 8px 12px;
+    }
+
+    .study-history-row small {
+        grid-column: 2;
     }
 
     .study-menu-panel {

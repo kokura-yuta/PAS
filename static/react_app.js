@@ -116,6 +116,9 @@
 
         const examples = homeData ? homeData.subject_examples : [];
         const threads = homeData ? homeData.study_threads : [];
+        const nextThread = homeData ? homeData.next_study_thread : null;
+        const recentHistory = homeData ? homeData.recent_study_history : [];
+        const memoryHighlights = homeData ? homeData.memory_highlights : [];
         const userName = homeData && homeData.user ? homeData.user.name : window.PAS_BOOTSTRAP.userName;
 
         return h(
@@ -155,11 +158,12 @@
             h(
                 "section",
                 { className: "study-hero" },
-                h("h1", null, "勉強したいことを追加"),
+                h("p", { className: "section-kicker" }, "Today"),
+                h("h1", null, "今日は何を勉強しますか？"),
                 h(
                     "p",
                     { className: "study-lead" },
-                    "科目ごとに先生が変わります。教え方の好みや苦手は、すべての科目で共有されます。"
+                    "科目ごとに先生が変わり、教え方の好みや苦手はすべての授業で共有されます。"
                 ),
                 h(
                     "form",
@@ -173,7 +177,7 @@
                         },
                         disabled: creating
                     }),
-                    h("button", { type: "submit", disabled: creating }, creating ? "作成中" : "追加")
+                    h("button", { type: "submit", disabled: creating }, creating ? "作成中" : "+ 新しい学習")
                 ),
                 examples && examples.length
                     ? h(
@@ -197,10 +201,72 @@
                     : null,
                 error ? h("p", { className: "notice" }, error) : null
             ),
+            nextThread
+                ? h(
+                    "section",
+                    { className: "continue-card" },
+                    h("p", { className: "section-kicker" }, "前回の続き"),
+                    h("div", { className: "continue-main" },
+                        h("span", null, nextThread.display_title),
+                        h("strong", null, nextThread.next_lesson_label)
+                    ),
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            onClick: function () {
+                                navigate(`/chat/${nextThread.id}`);
+                            }
+                        },
+                        "続きから始める"
+                    )
+                )
+                : null,
+            recentHistory && recentHistory.length
+                ? h(
+                    "section",
+                    { className: "study-history-section" },
+                    h("div", { className: "section-kicker" }, "最近勉強した内容"),
+                    h(
+                        "div",
+                        { className: "study-history-list" },
+                        recentHistory.map(function (item) {
+                            return h(
+                                "button",
+                                {
+                                    key: item.id,
+                                    type: "button",
+                                    className: "study-history-row",
+                                    onClick: function () {
+                                        navigate(item.url);
+                                    }
+                                },
+                                h("span", null, item.day_label),
+                                h("strong", null, item.title),
+                                h("small", null, item.summary)
+                            );
+                        })
+                    )
+                )
+                : null,
+            memoryHighlights && memoryHighlights.length
+                ? h(
+                    "section",
+                    { className: "teacher-memory-card" },
+                    h("p", { className: "section-kicker" }, "先生が覚えていること"),
+                    h(
+                        "ul",
+                        null,
+                        memoryHighlights.map(function (memory) {
+                            return h("li", { key: memory.id }, memory.content);
+                        })
+                    )
+                )
+                : null,
             h(
                 "section",
                 { className: "study-thread-section" },
-                h("div", { className: "section-kicker" }, "最近の授業"),
+                h("div", { className: "section-kicker" }, "授業"),
                 !homeData
                     ? h("p", { className: "react-loading" }, "読み込み中")
                     : threads && threads.length
