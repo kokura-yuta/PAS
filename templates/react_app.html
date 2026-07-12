@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PAS</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="theme-{{ settings.theme_name }}">
+    <div id="pas-react-root">
+        <main class="home home-minimal">
+            <p class="eyebrow">Personal AI System</p>
+            <h1>PAS</h1>
+            <p class="lead">PASを読み込んでいます。</p>
+        </main>
+    </div>
+
+    <script>
+        window.PAS_BOOTSTRAP = {
+            userName: {{ current_user.name|tojson }},
+            themeName: {{ settings.theme_name|tojson }}
+        };
+    </script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="/static/react_app.js"></script>
+</body>
+</html>

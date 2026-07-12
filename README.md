@@ -19,11 +19,14 @@ PAS v1.3 foundation
 - v1.1: 日記チャット、自由チャット、ログイン、新規登録、ユーザーごとのデータ分離
 - v1.2: Core Memoryの重要度・確信度・情報源・確認状態の管理
 - v1.3 foundation: Timeline Memory、PAS Calendar、予定の作成・編集・削除
+- v1.3.1: Reactフロントエンド基礎、FastAPI JSON API、Reactホーム・Reactチャット
 
 ## 現在できること
 
 - FastAPIでWebアプリを起動
 - ホーム画面の表示
+- Reactによるホーム・チャット画面の表示
+- FastAPI JSON APIによる画面データ取得
 - AIチャット
 - OpenAI APIを使った返答生成
 - PostgreSQLへの会話保存
@@ -50,6 +53,7 @@ PAS v1.3 foundation
 
 - Python 3.13
 - FastAPI
+- React
 - Jinja2
 - HTML
 - CSS

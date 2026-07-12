@@ -1,10 +1,11 @@
 from fastapi import FastAPI, Request, Form
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
 from dotenv import load_dotenv
+from pydantic import BaseModel
 import os
 import json
 import hashlib
@@ -64,6 +65,15 @@ MEMORY_STATUS_LABELS = {
     "confirmed": "確定",
     "pending": "確認待ち"
 }
+
+
+class ChatThreadCreatePayload(BaseModel):
+    title: str = ""
+    thread_type: str = CUSTOM_THREAD_TYPE
+
+
+class ChatMessageCreatePayload(BaseModel):
+    message: str = ""
 
 
 def truncate_text(text, max_length=60):
@@ -1920,6 +1930,125 @@ PAS Calendar予定:
 {message}
 """
 
+
+def serialize_chat_items(chat_items):
+    return [
+        {
+            "role": chat["role"],
+            "content": chat["content"],
+            "created_at": format_datetime(chat.get("created_at"))
+        }
+        for chat in chat_items
+    ]
+
+
+def serialize_thread(thread):
+    return {
+        "id": thread.id,
+        "title": thread.title,
+        "description": get_thread_description(thread.thread_type),
+        "thread_type": thread.thread_type,
+        "thread_type_label": get_thread_type_label(thread.thread_type),
+        "can_delete": thread.thread_type != DIARY_THREAD_TYPE
+    }
+
+
+def process_chat_message(thread, user_id, clean_message):
+    history = load_messages(thread.id, user_id)
+    memories = load_memories(user_id)
+    timeline_items = load_timeline_items(user_id)
+    timeline_text = format_timeline_for_prompt(timeline_items)
+    calendar_items = load_calendar_events(user_id)
+    calendar_text = format_calendar_for_prompt(calendar_items)
+    profile = load_profile(user_id)
+    profile_text = format_profile_for_prompt(profile)
+    goals = load_goals(user_id)
+    goals_text = format_goals_for_prompt(goals)
+    settings = load_settings(user_id)
+    persona = settings.default_persona
+    response_length = settings.response_length
+
+    save_message("user", clean_message, thread.id, user_id)
+
+    memory_data = {
+        "should_save": False,
+        "category": "",
+        "content": "",
+        "importance": 0,
+        "confidence": 0,
+        "source_type": ""
+    }
+
+    if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
+        try:
+            memory_data = extract_memory_from_message(clean_message)
+        except Exception:
+            memory_data = {
+                "should_save": False,
+                "category": "",
+                "content": "",
+                "importance": 0,
+                "confidence": 0,
+                "source_type": ""
+            }
+
+    should_save_memory = (
+        memory_data.get("should_save")
+        and memory_data.get("content")
+        and memory_data.get("category")
+    )
+
+    if should_save_memory:
+        save_or_update_memory(
+            content=memory_data["content"],
+            category=memory_data["category"],
+            importance=memory_data.get("importance", 3),
+            confidence=memory_data.get("confidence", 0.7),
+            source_type=memory_data.get("source_type", "ai_inference"),
+            user_id=user_id
+        )
+
+    ai_message = ""
+    should_save_ai_message = True
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=build_ai_prompt(
+                clean_message,
+                history,
+                memories,
+                timeline_text,
+                calendar_text,
+                profile_text,
+                goals_text,
+                persona,
+                response_length,
+                thread.title,
+                thread.thread_type
+            )
+        )
+
+        ai_message = response.output_text
+    except Exception:
+        ai_message = "PASの回答を生成できませんでした。もう一度送信してください。"
+        should_save_ai_message = False
+
+    if should_save_ai_message:
+        save_message("assistant", ai_message, thread.id, user_id)
+
+    chat_items = load_chat_items(thread.id, user_id)
+
+    if not should_save_ai_message:
+        chat_items.append({
+            "role": "assistant",
+            "content": ai_message,
+            "created_at": datetime.utcnow()
+        })
+
+    return chat_items
+
+
 app = FastAPI()
 app.add_middleware(
     SessionMiddleware,
@@ -1934,6 +2063,20 @@ app.mount(
 )
 
 templates = Jinja2Templates(directory="templates")
+
+
+def render_react_app(request, current_user):
+    settings = load_settings(current_user.id)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="react_app.html",
+        context={
+            "settings": settings,
+            "current_user": current_user
+        }
+    )
+
 
 @app.get("/signup")
 def signup_page(request: Request):
@@ -2016,6 +2159,136 @@ def logout_action(request: Request):
     return RedirectResponse(url="/login", status_code=303)
 
 
+@app.get("/api/home")
+def api_home(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    settings = load_settings(current_user.id)
+    get_or_create_diary_thread(current_user.id)
+    home_snapshot = load_home_snapshot(current_user.id)
+
+    return {
+        "user": {
+            "id": current_user.id,
+            "name": current_user.name
+        },
+        "settings": {
+            "theme_name": settings.theme_name,
+            "default_persona": settings.default_persona,
+            "response_length": settings.response_length
+        },
+        "home_snapshot": home_snapshot
+    }
+
+
+@app.get("/api/chat")
+def api_diary_chat(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    settings = load_settings(current_user.id)
+    diary_thread = get_or_create_diary_thread(current_user.id)
+    chat_items = load_chat_items(diary_thread.id, current_user.id)
+
+    return {
+        "settings": {
+            "theme_name": settings.theme_name,
+            "default_persona": settings.default_persona
+        },
+        "thread": serialize_thread(diary_thread),
+        "messages": serialize_chat_items(chat_items)
+    }
+
+
+@app.get("/api/chat/{thread_id}")
+def api_chat_thread(request: Request, thread_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    settings = load_settings(current_user.id)
+    thread = load_chat_thread(thread_id, current_user.id)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    chat_items = load_chat_items(thread.id, current_user.id)
+
+    return {
+        "settings": {
+            "theme_name": settings.theme_name,
+            "default_persona": settings.default_persona
+        },
+        "thread": serialize_thread(thread),
+        "messages": serialize_chat_items(chat_items)
+    }
+
+
+@app.post("/api/chat_threads")
+def api_chat_thread_create(request: Request, payload: ChatThreadCreatePayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    clean_title = payload.title.strip()
+
+    if not clean_title:
+        clean_title = "新しい会話"
+
+    thread = create_chat_thread(clean_title, current_user.id, payload.thread_type)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_create_failed"}, status_code=400)
+
+    return {
+        "thread": serialize_thread(thread),
+        "url": f"/chat/{thread.id}"
+    }
+
+
+@app.post("/api/chat/{thread_id}/messages")
+def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessageCreatePayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    thread = load_chat_thread(thread_id, current_user.id)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    clean_message = payload.message.strip()
+
+    if not clean_message:
+        return JSONResponse({"error": "message_required"}, status_code=400)
+
+    chat_items = process_chat_message(thread, current_user.id, clean_message)
+
+    return {
+        "thread": serialize_thread(thread),
+        "messages": serialize_chat_items(chat_items)
+    }
+
+
+@app.delete("/api/chat_threads/{thread_id}")
+def api_chat_thread_delete(request: Request, thread_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    delete_chat_thread(thread_id, current_user.id)
+    return {"ok": True}
+
+
 @app.get("/")
 def home(request: Request):
     current_user = get_current_user(request)
@@ -2023,26 +2296,8 @@ def home(request: Request):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    settings = load_settings(current_user.id)
     get_or_create_diary_thread(current_user.id)
-    chat_threads = load_chat_threads(current_user.id)
-    home_snapshot = load_home_snapshot(current_user.id)
-    custom_thread_count = sum(
-        1 for thread in chat_threads if thread["thread_type"] == CUSTOM_THREAD_TYPE
-    )
-
-    return templates.TemplateResponse(
-        request=request,
-        name="home.html",
-        context={
-            "settings": settings,
-            "current_user": current_user,
-            "home_snapshot": home_snapshot,
-            "chat_threads": chat_threads,
-            "custom_thread_count": custom_thread_count,
-            "thread_title_max_length": THREAD_TITLE_MAX_LENGTH
-        }
-    )
+    return render_react_app(request, current_user)
 
 @app.get("/chat")
 def chat_page(request: Request, draft: str = ""):
@@ -2051,24 +2306,8 @@ def chat_page(request: Request, draft: str = ""):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    settings = load_settings(current_user.id)
-    diary_thread = get_or_create_diary_thread(current_user.id)
-    chat_items = load_chat_items(diary_thread.id, current_user.id)
-
-    return templates.TemplateResponse(
-        request=request,
-        name="chat.html",
-        context={
-            "settings": settings,
-            "chat_items": chat_items,
-            "thread_id": diary_thread.id,
-            "thread_title": diary_thread.title,
-            "thread_description": get_thread_description(diary_thread.thread_type),
-            "thread_type_label": get_thread_type_label(diary_thread.thread_type),
-            "can_delete_thread": False,
-            "draft_message": draft
-        }
-    )
+    get_or_create_diary_thread(current_user.id)
+    return render_react_app(request, current_user)
 
 @app.get("/chat/{thread_id}")
 def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
@@ -2077,28 +2316,12 @@ def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    settings = load_settings(current_user.id)
     thread = load_chat_thread(thread_id, current_user.id)
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
 
-    chat_items = load_chat_items(thread_id, current_user.id)
-
-    return templates.TemplateResponse(
-        request=request,
-        name="chat.html",
-        context={
-            "settings": settings,
-            "chat_items": chat_items,
-            "thread_id": thread_id,
-            "thread_title": thread.title,
-            "thread_description": get_thread_description(thread.thread_type),
-            "thread_type_label": get_thread_type_label(thread.thread_type),
-            "can_delete_thread": thread.thread_type != DIARY_THREAD_TYPE,
-            "draft_message": draft
-        }
-    )
+    return render_react_app(request, current_user)
 
 @app.post("/chat_threads")
 def chat_thread_create(
@@ -2477,98 +2700,8 @@ def chat_send(request: Request, thread_id: int, message: str = Form(...)):
     if not clean_message:
         return RedirectResponse(url=f"/chat/{thread_id}", status_code=303)
 
-    history = load_messages(thread_id, current_user.id)
-    memories = load_memories(current_user.id)
-    timeline_items = load_timeline_items(current_user.id)
-    timeline_text = format_timeline_for_prompt(timeline_items)
-    calendar_items = load_calendar_events(current_user.id)
-    calendar_text = format_calendar_for_prompt(calendar_items)
-    profile = load_profile(current_user.id)
-    profile_text = format_profile_for_prompt(profile)
-    goals = load_goals(current_user.id)
-    goals_text = format_goals_for_prompt(goals)
     settings = load_settings(current_user.id)
-    persona = settings.default_persona
-    response_length = settings.response_length
-
-    save_message("user", clean_message, thread_id, current_user.id)
-
-    memory_data = {
-        "should_save": False,
-        "category": "",
-        "content": "",
-        "importance": 0,
-        "confidence": 0,
-        "source_type": ""
-    }
-
-    if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
-        try:
-            memory_data = extract_memory_from_message(clean_message)
-        except Exception:
-            memory_data = {
-                "should_save": False,
-                "category": "",
-                "content": "",
-                "importance": 0,
-                "confidence": 0,
-                "source_type": ""
-            }
-
-    should_save_memory = (
-        memory_data.get("should_save")
-        and memory_data.get("content")
-        and memory_data.get("category")
-    )
-
-    if should_save_memory:
-        save_or_update_memory(
-            content=memory_data["content"],
-            category=memory_data["category"],
-            importance=memory_data.get("importance", 3),
-            confidence=memory_data.get("confidence", 0.7),
-            source_type=memory_data.get("source_type", "ai_inference"),
-            user_id=current_user.id
-        )
-
-
-    ai_message = ""
-    should_save_ai_message = True
-
-    try:
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=build_ai_prompt(
-                clean_message,
-                history,
-                memories,
-                timeline_text,
-                calendar_text,
-                profile_text,
-                goals_text,
-                persona,
-                response_length,
-                thread.title,
-                thread.thread_type
-            )
-        )
-
-        ai_message = response.output_text
-    except Exception:
-        ai_message = "PASの回答を生成できませんでした。もう一度送信してください。"
-        should_save_ai_message = False
-
-    if should_save_ai_message:
-        save_message("assistant", ai_message, thread_id, current_user.id)
-
-    chat_items = load_chat_items(thread_id, current_user.id)
-
-    if not should_save_ai_message:
-        chat_items.append({
-            "role": "assistant",
-            "content": ai_message,
-            "created_at": datetime.utcnow()
-        })
+    chat_items = process_chat_message(thread, current_user.id, clean_message)
 
     
     return templates.TemplateResponse(
