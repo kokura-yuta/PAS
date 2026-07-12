@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Request, Form, File, UploadFile
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -10,6 +10,8 @@ import os
 import json
 import hashlib
 import secrets
+import base64
+import re
 from urllib.parse import quote
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -67,6 +69,8 @@ MEMORY_STATUS_LABELS = {
     "confirmed": "確定",
     "pending": "確認待ち"
 }
+SUBJECT_EXAMPLES = ["英語", "数学", "Python", "Java", "TOEIC", "基本情報", "大学数学"]
+STUDY_IMAGE_MAX_BYTES = 7 * 1024 * 1024
 
 
 class ChatThreadCreatePayload(BaseModel):
@@ -207,6 +211,12 @@ class ChatThread(Base):
     user_id = Column(Integer, index=True)
     title = Column(String(200))
     thread_type = Column(String(50), default="custom")
+    last_studied_at = Column(DateTime)
+    study_session_count = Column(Integer, default=0)
+    study_streak_count = Column(Integer, default=0)
+    last_study_date = Column(String(20))
+    test_date = Column(String(50))
+    deadline = Column(String(50))
     created_at = Column(DateTime, default=app_now)
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
@@ -327,6 +337,21 @@ def ensure_chat_message_thread_id_column():
     ensure_columns("chat_messages", {"thread_id": "INTEGER"})
 
 ensure_chat_message_thread_id_column()
+
+def ensure_chat_thread_study_columns():
+    ensure_columns(
+        "chat_threads",
+        {
+            "last_studied_at": "TIMESTAMP",
+            "study_session_count": "INTEGER DEFAULT 0",
+            "study_streak_count": "INTEGER DEFAULT 0",
+            "last_study_date": "VARCHAR(20)",
+            "test_date": "VARCHAR(50)",
+            "deadline": "VARCHAR(50)"
+        }
+    )
+
+ensure_chat_thread_study_columns()
 
 def ensure_memory_metadata_columns():
     memory_columns = {
@@ -459,7 +484,6 @@ def get_current_user(request):
 def login_user(request, user_id):
     request.session["user_id"] = user_id
     claim_unowned_data(user_id)
-    get_or_create_diary_thread(user_id)
     load_settings(user_id)
 
 
@@ -515,6 +539,244 @@ def get_or_create_diary_thread(user_id):
             db.commit()
 
         return diary_thread
+    finally:
+        db.close()
+
+
+def normalize_subject_title(title):
+    clean_title = " ".join((title or "").strip().split())
+
+    if not clean_title:
+        return ""
+
+    return truncate_text(clean_title, THREAD_TITLE_MAX_LENGTH)
+
+
+def get_or_create_default_study_thread(user_id):
+    db = SessionLocal()
+
+    try:
+        study_thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
+            .filter(ChatThread.thread_type == STUDY_THREAD_TYPE)
+            .order_by(ChatThread.updated_at.desc().nullslast(), ChatThread.created_at.desc())
+            .first()
+        )
+
+        if study_thread is None:
+            study_thread = ChatThread(
+                user_id=user_id,
+                title="学習相談",
+                thread_type=STUDY_THREAD_TYPE
+            )
+            db.add(study_thread)
+            db.commit()
+            db.refresh(study_thread)
+
+        return study_thread
+    finally:
+        db.close()
+
+
+def get_study_days_since(last_studied_at):
+    if last_studied_at is None:
+        return None
+
+    today = datetime.now(get_app_timezone()).date()
+    return (today - last_studied_at.date()).days
+
+
+def serialize_study_context(thread):
+    days_since_last = get_study_days_since(thread.last_studied_at)
+    session_count = thread.study_session_count or 0
+    streak_count = thread.study_streak_count or 0
+
+    if days_since_last is None:
+        last_studied_label = "まだ学習していません"
+        status_line = "この科目はこれから一緒に育てる学習チャットです。"
+    elif days_since_last == 0:
+        last_studied_label = "今日学習しました"
+        status_line = f"今日は{thread.title}を進めています。"
+    elif days_since_last == 1:
+        last_studied_label = "昨日学習しました"
+        status_line = f"昨日の{thread.title}の続きから始められます。"
+    else:
+        last_studied_label = f"{days_since_last}日前に学習しました"
+        status_line = f"{days_since_last}日ぶりの{thread.title}です。まず前回の復習から入れます。"
+
+    return {
+        "subject": thread.title,
+        "last_studied_label": last_studied_label,
+        "days_since_last": days_since_last,
+        "session_count": session_count,
+        "streak_count": streak_count,
+        "test_date": thread.test_date or "",
+        "deadline": thread.deadline or "",
+        "status_line": status_line
+    }
+
+
+def format_study_context_for_prompt(thread):
+    context = serialize_study_context(thread)
+
+    return f"""
+科目: {context["subject"]}
+学習状況: {context["status_line"]}
+最終学習: {context["last_studied_label"]}
+学習回数: {context["session_count"]}
+連続学習日数: {context["streak_count"]}
+テスト日: {context["test_date"] or "未登録"}
+提出期限: {context["deadline"] or "未登録"}
+"""
+
+
+def record_study_activity(thread_id, user_id):
+    db = SessionLocal()
+
+    try:
+        thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.id == thread_id)
+            .filter(ChatThread.user_id == user_id)
+            .first()
+        )
+
+        if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+            return
+
+        today = datetime.now(get_app_timezone()).date()
+        previous_date = None
+
+        if thread.last_study_date:
+            try:
+                previous_date = datetime.strptime(thread.last_study_date, "%Y-%m-%d").date()
+            except ValueError:
+                previous_date = None
+
+        thread.last_studied_at = app_now()
+        thread.study_session_count = (thread.study_session_count or 0) + 1
+
+        if previous_date == today:
+            thread.study_streak_count = max(thread.study_streak_count or 1, 1)
+        elif previous_date == today - timedelta(days=1):
+            thread.study_streak_count = (thread.study_streak_count or 0) + 1
+        else:
+            thread.study_streak_count = 1
+
+        thread.last_study_date = today.isoformat()
+        thread.updated_at = app_now()
+        db.commit()
+    finally:
+        db.close()
+
+
+def infer_date_from_message(message):
+    message = (message or "").strip()
+    today = datetime.now(get_app_timezone()).date()
+
+    if not message:
+        return None
+
+    explicit_date = re.search(r"(20\d{2})[-/年](\d{1,2})[-/月](\d{1,2})日?", message)
+
+    if explicit_date:
+        try:
+            return datetime(
+                int(explicit_date.group(1)),
+                int(explicit_date.group(2)),
+                int(explicit_date.group(3))
+            ).date()
+        except ValueError:
+            return None
+
+    month_day = re.search(r"(\d{1,2})月(\d{1,2})日?", message)
+
+    if month_day:
+        try:
+            candidate = datetime(today.year, int(month_day.group(1)), int(month_day.group(2))).date()
+            if candidate < today:
+                candidate = datetime(today.year + 1, int(month_day.group(1)), int(month_day.group(2))).date()
+            return candidate
+        except ValueError:
+            return None
+
+    days_after = re.search(r"(\d{1,2})日後", message)
+
+    if days_after:
+        return today + timedelta(days=int(days_after.group(1)))
+
+    if "明後日" in message:
+        return today + timedelta(days=2)
+
+    if "明日" in message:
+        return today + timedelta(days=1)
+
+    if "今日" in message:
+        return today
+
+    if "来週" in message:
+        weekday_map = {
+            "月": 0,
+            "火": 1,
+            "水": 2,
+            "木": 3,
+            "金": 4,
+            "土": 5,
+            "日": 6
+        }
+
+        for label, weekday in weekday_map.items():
+            if f"来週{label}" in message or f"来週の{label}" in message:
+                days_until_next_week = 7 - today.weekday() + weekday
+                return today + timedelta(days=days_until_next_week)
+
+        return today + timedelta(days=7)
+
+    if "来月" in message:
+        year = today.year
+        month = today.month + 1
+
+        if month == 13:
+            year += 1
+            month = 1
+
+        return datetime(year, month, min(today.day, 28)).date()
+
+    return None
+
+
+def update_study_schedule_from_message(thread_id, user_id, message):
+    inferred_date = infer_date_from_message(message)
+
+    if inferred_date is None:
+        return
+
+    db = SessionLocal()
+
+    try:
+        thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.id == thread_id)
+            .filter(ChatThread.user_id == user_id)
+            .first()
+        )
+
+        if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+            return
+
+        test_keywords = ["テスト", "試験", "小テスト", "模試", "検定", "受験"]
+        deadline_keywords = ["提出", "締切", "締め切り", "期限", "課題", "レポート"]
+        date_text = inferred_date.isoformat()
+
+        if any(keyword in message for keyword in test_keywords):
+            thread.test_date = date_text
+
+        if any(keyword in message for keyword in deadline_keywords):
+            thread.deadline = date_text
+
+        thread.updated_at = app_now()
+        db.commit()
     finally:
         db.close()
 
@@ -586,8 +848,49 @@ def load_chat_threads(user_id):
         db.close()
 
 
+def load_study_threads(user_id):
+    db = SessionLocal()
+
+    try:
+        threads = (
+            db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
+            .filter(ChatThread.thread_type == STUDY_THREAD_TYPE)
+            .order_by(ChatThread.updated_at.desc().nullslast(), ChatThread.created_at.desc())
+            .all()
+        )
+
+        study_threads = []
+
+        for thread in threads:
+            latest_message = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.user_id == user_id)
+                .filter(ChatMessage.thread_id == thread.id)
+                .order_by(ChatMessage.created_at.desc())
+                .first()
+            )
+
+            study_threads.append({
+                "id": thread.id,
+                "title": thread.title,
+                "display_title": truncate_text(thread.title, THREAD_TITLE_MAX_LENGTH),
+                "latest_message": truncate_text(
+                    latest_message.content if latest_message else "まだ授業は始まっていません。",
+                    64
+                ),
+                "updated_at_text": format_datetime(thread.updated_at or thread.created_at),
+                "study_context": serialize_study_context(thread),
+                "can_delete": True
+            })
+
+        return study_threads
+    finally:
+        db.close()
+
+
 def create_chat_thread(title, user_id, thread_type=CUSTOM_THREAD_TYPE):
-    clean_title = truncate_text(title, THREAD_TITLE_MAX_LENGTH)
+    clean_title = normalize_subject_title(title)
     thread_type = thread_type if thread_type in CREATABLE_THREAD_TYPES else CUSTOM_THREAD_TYPE
 
     if not clean_title:
@@ -1655,6 +1958,77 @@ content は1つの記憶だけを短い1文にしてください。
     return memory_data
 
 
+def extract_study_memory_from_message(message, subject):
+    response = client.responses.create(
+        model="gpt-4.1-mini",
+        input=f"""
+あなたはStudy PASの学習記憶を整理するAIです。
+ユーザーの発言から、今後その人に合わせて教えるために覚える価値がある情報だけを抽出してください。
+
+保存すべき情報:
+- 理解度
+- 苦手分野
+- 得意分野
+- 好きな説明方法
+- 避けたい説明方法
+- 学習目標
+- テスト日や提出期限
+- 勉強習慣
+- 前回の続きに役立つ情報
+
+保存しなくていい情報:
+- あいさつ
+- その場限りの短い雑談
+- 長期的な教え方に関係しない内容
+
+必ずJSONだけで返してください。
+
+保存する情報がある場合:
+{{
+  "should_save": true,
+  "category": "weak_area",
+  "content": "ユーザーはPythonのreturnの使い方がまだ曖昧。",
+  "importance": 4,
+  "confidence": 0.9,
+  "source_type": "user_statement"
+}}
+
+保存する情報がない場合:
+{{
+  "should_save": false,
+  "category": "",
+  "content": "",
+  "importance": 0,
+  "confidence": 0,
+  "source_type": ""
+}}
+
+category は understanding, weak_area, strong_area, explanation_preference, learning_goal, test_deadline, assignment_deadline, study_habit の中から選んでください。
+content は「{subject}」の学習に役立つ短い1文にしてください。
+ユーザーが明言した情報は user_statement、推測は ai_inference にしてください。
+推測の場合は confidence を 0.65 以下にしてください。
+
+科目:
+{subject}
+
+ユーザーの発言:
+{message}
+"""
+    )
+
+    try:
+        return json.loads(response.output_text)
+    except json.JSONDecodeError:
+        return {
+            "should_save": False,
+            "category": "",
+            "content": "",
+            "importance": 0,
+            "confidence": 0,
+            "source_type": ""
+        }
+
+
 PAS_PERSONAS = {
     "friend": """
 あなたはPASです。
@@ -1749,6 +2123,21 @@ PAS_RESPONSE_RULES = """
 """
 
 
+STUDY_TEACHER_RULES = """
+Study PASの基本方針:
+- あなたは「優しい先生」です。友達、厳しい先生、コーチ、秘書にはなりません。
+- 目的は、答えを出すことではなく、ユーザーが理解できるように教え方を育てることです。
+- 返答は短めに始めてください。必要な時だけ詳しく説明してください。
+- まず状況を受け止め、次に1つだけ確認質問をしてください。
+- 説明が必要な時は、結論、たとえ、短い例、理解確認の順にしてください。
+- 分からないと言われた時は、言い換え・具体例・小さいステップに分けてください。
+- ユーザーの苦手、理解度、好きな説明方法、前回の続き、テスト日、提出期限を自然に使ってください。
+- 「前にこの科目をやった日」「久しぶりかどうか」「テストまでの日数」が分かる時は、自然に学習ペースへ反映してください。
+- 勉強以外の人生相談、健康管理、日記、予定管理、Goal Plannerの話へ広げすぎないでください。
+- 最後は必要に応じて「ここまで分かる？」のような理解確認を1つだけ入れてください。
+"""
+
+
 
 def build_thread_prompt(thread_title, thread_type):
     if thread_type == DIARY_THREAD_TYPE:
@@ -1769,10 +2158,11 @@ Core Memory、目標、Timeline、Calendarから、今の状況に合う次の�
 
     if thread_type == STUDY_THREAD_TYPE:
         return f"""
-現在のチャット: {thread_title}
-このチャットはStudy PASです。
-学習計画・資格・理解度・復習を支援してください。
-やる気論だけでなく、今日できる勉強行動まで小さく分けてください。
+現在の科目: {thread_title}
+このチャットはStudy PASの科目別チャットです。
+あなたは「{thread_title}」専門の優しい先生です。
+この科目の理解度、苦手、前回の続き、テストや提出期限を踏まえて教えてください。
+ただし、全科目で共有しているMemoryから「このユーザーに合う教え方」は活用してください。
 """
 
     if thread_type == FITNESS_THREAD_TYPE:
@@ -1904,6 +2294,13 @@ CalendarやTimelineに関係する情報があれば自然に使ってくださ�
 日記チャットなので、評価や説教よりも、気持ちを言葉にする支援を優先してください。
 """
 
+    if thread_type == STUDY_THREAD_TYPE:
+        return mode_prompts[mode] + """
+Study PASなので、勉強に集中した返答にしてください。
+説明が必要な時は、結論→短い例→理解確認の順番にしてください。
+長い講義より、ユーザーが次に答えられる小さい質問を1つ出してください。
+"""
+
     return mode_prompts[mode]
 
 
@@ -1918,13 +2315,55 @@ def build_ai_prompt(
     persona="friend",
     response_length="balanced",
     thread_title="日記",
-    thread_type=DIARY_THREAD_TYPE
+    thread_type=DIARY_THREAD_TYPE,
+    study_context_text=""
 ):
-    persona_prompt = PAS_PERSONAS.get(persona, PAS_PERSONAS["friend"])
     length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
     response_style_prompt = build_response_style_prompt(message, response_length, thread_type)
     thread_prompt = build_thread_prompt(thread_title, thread_type)
     current_datetime_text = format_current_datetime_for_prompt()
+
+    if thread_type == STUDY_THREAD_TYPE:
+        return f"""
+あなたはStudy PASです。
+
+先生としてのルール:
+{STUDY_TEACHER_RULES}
+
+現在日時:
+{current_datetime_text}
+
+日付の扱い:
+「今日」「明日」「昨日」「来週」などは、必ず上の現在日時とタイムゾーンを基準に判断してください。
+学習日、テスト日、提出期限が関係する場合は、必要に応じて具体的な日付も添えてください。
+
+チャットの種類:
+{thread_prompt}
+
+学習状況:
+{study_context_text}
+
+返答の長さ:
+{length_prompt}
+
+今回の返し方:
+{response_style_prompt}
+
+共有Memory:
+{memories}
+
+Timeline Memory:
+{timeline_text}
+
+これまでの会話:
+{history}
+
+ユーザーの今回の発言:
+{message}
+"""
+
+    persona_prompt = PAS_PERSONAS.get(persona, PAS_PERSONAS["friend"])
+
     return f"""
 {persona_prompt}
 
@@ -1982,7 +2421,7 @@ def serialize_chat_items(chat_items):
 
 
 def serialize_thread(thread):
-    return {
+    thread_data = {
         "id": thread.id,
         "title": thread.title,
         "description": get_thread_description(thread.thread_type),
@@ -1991,8 +2430,14 @@ def serialize_thread(thread):
         "can_delete": thread.thread_type != DIARY_THREAD_TYPE
     }
 
+    if thread.thread_type == STUDY_THREAD_TYPE:
+        thread_data["study_context"] = serialize_study_context(thread)
+
+    return thread_data
+
 
 def process_chat_message(thread, user_id, clean_message):
+    is_study_thread = thread.thread_type == STUDY_THREAD_TYPE
     history = load_messages(thread.id, user_id)
     memories = load_memories(user_id)
     timeline_items = load_timeline_items(user_id)
@@ -2009,6 +2454,12 @@ def process_chat_message(thread, user_id, clean_message):
 
     save_message("user", clean_message, thread.id, user_id)
 
+    if is_study_thread:
+        update_study_schedule_from_message(thread.id, user_id, clean_message)
+        record_study_activity(thread.id, user_id)
+        thread = load_chat_thread(thread.id, user_id) or thread
+        response_length = "auto"
+
     memory_data = {
         "should_save": False,
         "category": "",
@@ -2020,7 +2471,10 @@ def process_chat_message(thread, user_id, clean_message):
 
     if len(clean_message) >= MEMORY_EXTRACTION_MIN_LENGTH:
         try:
-            memory_data = extract_memory_from_message(clean_message)
+            if is_study_thread:
+                memory_data = extract_study_memory_from_message(clean_message, thread.title)
+            else:
+                memory_data = extract_memory_from_message(clean_message)
         except Exception:
             memory_data = {
                 "should_save": False,
@@ -2064,13 +2518,88 @@ def process_chat_message(thread, user_id, clean_message):
                 persona,
                 response_length,
                 thread.title,
-                thread.thread_type
+                thread.thread_type,
+                format_study_context_for_prompt(thread) if is_study_thread else ""
             )
         )
 
         ai_message = response.output_text
     except Exception:
         ai_message = "PASの回答を生成できませんでした。もう一度送信してください。"
+        should_save_ai_message = False
+
+    if should_save_ai_message:
+        save_message("assistant", ai_message, thread.id, user_id)
+
+    chat_items = load_chat_items(thread.id, user_id)
+
+    if not should_save_ai_message:
+        chat_items.append({
+            "role": "assistant",
+            "content": ai_message,
+            "created_at": app_now()
+        })
+
+    return chat_items
+
+
+def process_study_image_message(thread, user_id, clean_message, image_bytes, content_type):
+    is_study_thread = thread.thread_type == STUDY_THREAD_TYPE
+    prompt_message = clean_message or "この画像の内容を読み取って、分かりやすく授業してください。"
+    user_message = f"[画像] {prompt_message}"
+
+    save_message("user", user_message, thread.id, user_id)
+
+    if is_study_thread:
+        update_study_schedule_from_message(thread.id, user_id, prompt_message)
+        record_study_activity(thread.id, user_id)
+        thread = load_chat_thread(thread.id, user_id) or thread
+
+    history = load_messages(thread.id, user_id)
+    memories = load_memories(user_id)
+    timeline_text = format_timeline_for_prompt(load_timeline_items(user_id))
+    study_context_text = format_study_context_for_prompt(thread) if is_study_thread else ""
+    encoded_image = base64.b64encode(image_bytes).decode("utf-8")
+    image_url = f"data:{content_type};base64,{encoded_image}"
+
+    ai_message = ""
+    should_save_ai_message = True
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": build_ai_prompt(
+                                prompt_message,
+                                history,
+                                memories,
+                                timeline_text,
+                                "Study PAS v1.0ではGoogle Calendarは使いません。",
+                                "Study PAS v1.0ではプロフィール入力より会話からの理解を優先します。",
+                                "Study PAS v1.0ではGoal Plannerは使いません。",
+                                "friend",
+                                "auto",
+                                thread.title,
+                                thread.thread_type,
+                                study_context_text
+                            ) + "\n\n画像の内容を読み取り、必要なら問題文を整理してから教えてください。"
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": image_url
+                        }
+                    ]
+                }
+            ]
+        )
+        ai_message = response.output_text
+    except Exception:
+        ai_message = "画像を読み取れませんでした。もう一度送るか、画像の内容を短く文章で教えてください。"
         should_save_ai_message = False
 
     if should_save_ai_message:
@@ -2206,10 +2735,12 @@ def api_home(request: Request):
         return JSONResponse({"error": "login_required"}, status_code=401)
 
     settings = load_settings(current_user.id)
-    get_or_create_diary_thread(current_user.id)
-    home_snapshot = load_home_snapshot(current_user.id)
+    study_threads = load_study_threads(current_user.id)
 
     return {
+        "app_title": "Study PAS",
+        "app_concept": "一人ひとりを理解し、教え方が成長していく先生。",
+        "subject_examples": SUBJECT_EXAMPLES,
         "user": {
             "id": current_user.id,
             "name": current_user.name
@@ -2219,7 +2750,7 @@ def api_home(request: Request):
             "default_persona": settings.default_persona,
             "response_length": settings.response_length
         },
-        "home_snapshot": home_snapshot
+        "study_threads": study_threads
     }
 
 
@@ -2231,15 +2762,15 @@ def api_diary_chat(request: Request):
         return JSONResponse({"error": "login_required"}, status_code=401)
 
     settings = load_settings(current_user.id)
-    diary_thread = get_or_create_diary_thread(current_user.id)
-    chat_items = load_chat_items(diary_thread.id, current_user.id)
+    study_thread = get_or_create_default_study_thread(current_user.id)
+    chat_items = load_chat_items(study_thread.id, current_user.id)
 
     return {
         "settings": {
             "theme_name": settings.theme_name,
             "default_persona": settings.default_persona
         },
-        "thread": serialize_thread(diary_thread),
+        "thread": serialize_thread(study_thread),
         "messages": serialize_chat_items(chat_items)
     }
 
@@ -2256,6 +2787,9 @@ def api_chat_thread(request: Request, thread_id: int):
 
     if thread is None:
         return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    if thread.thread_type != STUDY_THREAD_TYPE:
+        return JSONResponse({"error": "study_thread_required"}, status_code=404)
 
     chat_items = load_chat_items(thread.id, current_user.id)
 
@@ -2276,12 +2810,12 @@ def api_chat_thread_create(request: Request, payload: ChatThreadCreatePayload):
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
-    clean_title = payload.title.strip()
+    clean_title = normalize_subject_title(payload.title)
 
     if not clean_title:
-        clean_title = "新しい会話"
+        clean_title = "新しい学習"
 
-    thread = create_chat_thread(clean_title, current_user.id, payload.thread_type)
+    thread = create_chat_thread(clean_title, current_user.id, STUDY_THREAD_TYPE)
 
     if thread is None:
         return JSONResponse({"error": "thread_create_failed"}, status_code=400)
@@ -2304,12 +2838,59 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
     if thread is None:
         return JSONResponse({"error": "thread_not_found"}, status_code=404)
 
+    if thread.thread_type != STUDY_THREAD_TYPE:
+        return JSONResponse({"error": "study_thread_required"}, status_code=400)
+
     clean_message = payload.message.strip()
 
     if not clean_message:
         return JSONResponse({"error": "message_required"}, status_code=400)
 
     chat_items = process_chat_message(thread, current_user.id, clean_message)
+    thread = load_chat_thread(thread.id, current_user.id) or thread
+
+    return {
+        "thread": serialize_thread(thread),
+        "messages": serialize_chat_items(chat_items)
+    }
+
+
+@app.post("/api/chat/{thread_id}/image")
+async def api_chat_image_upload(
+    request: Request,
+    thread_id: int,
+    message: str = Form(""),
+    image: UploadFile = File(...)
+):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    thread = load_chat_thread(thread_id, current_user.id)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    if thread.thread_type != STUDY_THREAD_TYPE:
+        return JSONResponse({"error": "study_thread_required"}, status_code=400)
+
+    content_type = image.content_type or ""
+
+    if not content_type.startswith("image/"):
+        return JSONResponse({"error": "image_required"}, status_code=400)
+
+    image_bytes = await image.read()
+
+    if not image_bytes:
+        return JSONResponse({"error": "image_required"}, status_code=400)
+
+    if len(image_bytes) > STUDY_IMAGE_MAX_BYTES:
+        return JSONResponse({"error": "image_too_large"}, status_code=400)
+
+    clean_message = message.strip()
+    chat_items = process_study_image_message(thread, current_user.id, clean_message, image_bytes, content_type)
+    thread = load_chat_thread(thread.id, current_user.id) or thread
 
     return {
         "thread": serialize_thread(thread),
@@ -2335,7 +2916,6 @@ def home(request: Request):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    get_or_create_diary_thread(current_user.id)
     return render_react_app(request, current_user)
 
 @app.get("/chat")
@@ -2345,7 +2925,7 @@ def chat_page(request: Request, draft: str = ""):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    get_or_create_diary_thread(current_user.id)
+    get_or_create_default_study_thread(current_user.id)
     return render_react_app(request, current_user)
 
 @app.get("/chat/{thread_id}")
@@ -2357,7 +2937,7 @@ def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
 
     thread = load_chat_thread(thread_id, current_user.id)
 
-    if thread is None:
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
         return RedirectResponse(url="/", status_code=303)
 
     return render_react_app(request, current_user)
@@ -2366,7 +2946,7 @@ def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
 def chat_thread_create(
     request: Request,
     title: str = Form(""),
-    thread_type: str = Form(CUSTOM_THREAD_TYPE)
+    thread_type: str = Form(STUDY_THREAD_TYPE)
 ):
     current_user = get_current_user(request)
 
@@ -2378,7 +2958,7 @@ def chat_thread_create(
     if not clean_title:
         return RedirectResponse(url="/", status_code=303)
 
-    thread = create_chat_thread(clean_title, current_user.id, thread_type)
+    thread = create_chat_thread(clean_title, current_user.id, STUDY_THREAD_TYPE)
 
     if thread is None:
         return RedirectResponse(url="/", status_code=303)
