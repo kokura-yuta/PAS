@@ -102,6 +102,13 @@ def format_datetime(value):
     return value.strftime("%Y-%m-%d %H:%M")
 
 
+def format_datetime_local_value(value):
+    if value is None:
+        return ""
+
+    return value.strftime("%Y-%m-%dT%H:%M")
+
+
 def get_thread_type_label(thread_type):
     return THREAD_TYPE_LABELS.get(thread_type, "チャット")
 
@@ -1536,18 +1543,6 @@ def create_google_calendar_event(user_id, title, description, start_datetime, en
 
 
 def create_calendar_event(user_id, title, description, start_datetime, end_datetime, location):
-    calendar_account = load_calendar_account(user_id)
-
-    if calendar_config_ready() and calendar_account is not None:
-        return create_google_calendar_event(
-            user_id=user_id,
-            title=title,
-            description=description,
-            start_datetime=start_datetime,
-            end_datetime=end_datetime,
-            location=location
-        )
-
     return save_local_calendar_event(
         user_id=user_id,
         title=title,
@@ -1556,6 +1551,66 @@ def create_calendar_event(user_id, title, description, start_datetime, end_datet
         end_datetime=end_datetime,
         location=location
     )
+
+
+def update_calendar_event(user_id, calendar_event_id, title, description, start_datetime, end_datetime, location):
+    title = (title or "").strip()
+    description = (description or "").strip()
+    location = (location or "").strip()
+    start_value = parse_datetime_value(start_datetime)
+    end_value = parse_datetime_value(end_datetime)
+
+    if not title or start_value is None or end_value is None:
+        return False, "予定名、開始日時、終了日時を入力してください。"
+
+    if end_value < start_value:
+        return False, "終了日時は開始日時より後にしてください。"
+
+    db = SessionLocal()
+
+    try:
+        calendar_event = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.id == calendar_event_id)
+            .first()
+        )
+
+        if calendar_event is None:
+            return False, "予定が見つかりません。"
+
+        calendar_event.title = title
+        calendar_event.description = description
+        calendar_event.start_datetime = start_value
+        calendar_event.end_datetime = end_value
+        calendar_event.location = location
+        calendar_event.google_event_id = None
+        calendar_event.updated_at = datetime.utcnow()
+        db.commit()
+        return True, "予定を更新しました。"
+    finally:
+        db.close()
+
+
+def delete_calendar_event(user_id, calendar_event_id):
+    db = SessionLocal()
+
+    try:
+        calendar_event = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.user_id == user_id)
+            .filter(CalendarEvent.id == calendar_event_id)
+            .first()
+        )
+
+        if calendar_event is None:
+            return False, "予定が見つかりません。"
+
+        db.delete(calendar_event)
+        db.commit()
+        return True, "予定を削除しました。"
+    finally:
+        db.close()
 
 
 def delete_google_calendar_event(user_id, calendar_event_id):
@@ -1611,8 +1666,10 @@ def load_calendar_events(user_id):
                 "description": event.description,
                 "start_text": format_datetime(event.start_datetime),
                 "end_text": format_datetime(event.end_datetime),
+                "start_value": format_datetime_local_value(event.start_datetime),
+                "end_value": format_datetime_local_value(event.end_datetime),
                 "location": event.location,
-                "source_label": "Google" if event.google_event_id else "PAS"
+                "source_label": "PAS"
             })
 
         return calendar_items
@@ -1622,7 +1679,7 @@ def load_calendar_events(user_id):
 
 def format_calendar_for_prompt(calendar_items):
     if not calendar_items:
-        return "Google Calendarの予定はまだ取得されていません。"
+        return "PAS Calendarに保存された予定はまだありません。"
 
     calendar_text = ""
 
@@ -2132,7 +2189,7 @@ PASの返答ルール:
 Timeline Memory:
 {timeline_text}
 
-Google Calendar予定:
+PAS Calendar予定:
 {calendar_text}
 
 これまでの会話:
@@ -2566,7 +2623,6 @@ def calendar_page(request: Request):
         return RedirectResponse(url="/login", status_code=303)
 
     settings = load_settings(current_user.id)
-    calendar_account = load_calendar_account(current_user.id)
     calendar_items = load_calendar_events(current_user.id)
 
     return templates.TemplateResponse(
@@ -2574,10 +2630,7 @@ def calendar_page(request: Request):
         name="calendar.html",
         context={
             "settings": settings,
-            "calendar_ready": calendar_config_ready(),
-            "calendar_connected": calendar_account is not None,
             "calendar_items": calendar_items,
-            "calendar_redirect_uri": get_calendar_redirect_uri(request),
             "message": request.query_params.get("message", "")
         }
     )
@@ -2590,21 +2643,7 @@ def google_calendar_connect(request: Request):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    flow = build_google_calendar_flow(request)
-
-    if flow is None:
-        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar設定が未完了です')}", status_code=303)
-
-    state = secrets.token_urlsafe(24)
-    request.session["google_calendar_oauth_state"] = state
-    authorization_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-        state=state
-    )
-
-    return RedirectResponse(url=authorization_url, status_code=303)
+    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
 
 
 @app.get("/calendar/callback")
@@ -2614,26 +2653,7 @@ def google_calendar_callback(request: Request):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    expected_state = request.session.get("google_calendar_oauth_state")
-    received_state = request.query_params.get("state")
-
-    if not expected_state or expected_state != received_state:
-        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar接続の確認に失敗しました')}", status_code=303)
-
-    flow = build_google_calendar_flow(request)
-
-    if flow is None:
-        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar設定が未完了です')}", status_code=303)
-
-    try:
-        flow.fetch_token(authorization_response=str(request.url))
-    except Exception:
-        return RedirectResponse(url=f"/calendar?message={quote('Google Calendar接続に失敗しました')}", status_code=303)
-
-    save_calendar_credentials(current_user.id, flow.credentials)
-    sync_google_calendar_events(current_user.id)
-
-    return RedirectResponse(url=f"/calendar?message={quote('Google Calendarを接続しました')}", status_code=303)
+    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
 
 
 @app.post("/calendar/sync")
@@ -2643,8 +2663,7 @@ def calendar_sync(request: Request):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    _, message = sync_google_calendar_events(current_user.id)
-    return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
+    return RedirectResponse(url=f"/calendar?message={quote('外部カレンダー連携は将来機能として保留中です')}", status_code=303)
 
 
 @app.post("/calendar/events")
@@ -2673,6 +2692,34 @@ def calendar_event_create(
     return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
 
 
+@app.post("/calendar/events/{calendar_event_id}/edit")
+def calendar_event_edit(
+    request: Request,
+    calendar_event_id: int,
+    title: str = Form(""),
+    description: str = Form(""),
+    start_datetime: str = Form(""),
+    end_datetime: str = Form(""),
+    location: str = Form("")
+):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    _, message = update_calendar_event(
+        user_id=current_user.id,
+        calendar_event_id=calendar_event_id,
+        title=title,
+        description=description,
+        start_datetime=start_datetime,
+        end_datetime=end_datetime,
+        location=location
+    )
+
+    return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
+
+
 @app.post("/calendar/events/{calendar_event_id}/delete")
 def calendar_event_delete(request: Request, calendar_event_id: int):
     current_user = get_current_user(request)
@@ -2680,7 +2727,7 @@ def calendar_event_delete(request: Request, calendar_event_id: int):
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    _, message = delete_google_calendar_event(current_user.id, calendar_event_id)
+    _, message = delete_calendar_event(current_user.id, calendar_event_id)
     return RedirectResponse(url=f"/calendar?message={quote(message)}", status_code=303)
 
 
