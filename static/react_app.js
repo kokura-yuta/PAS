@@ -31,35 +31,120 @@
 
     function App() {
         const [route, setRoute] = useState(window.location.pathname);
+        const [screenState, setScreenState] = useState("entered");
+        const [transitionDirection, setTransitionDirection] = useState("forward");
+        const [transitionMessage, setTransitionMessage] = useState("");
+        const routeRef = useRef(window.location.pathname);
+        const transitionTimerRef = useRef(null);
 
         useEffect(function () {
             function handlePopState() {
-                setRoute(window.location.pathname);
+                const nextPath = window.location.pathname;
+                changeRoute(nextPath, {
+                    direction: nextPath.startsWith("/chat") ? "forward" : "back",
+                    updateHistory: false,
+                    message: nextPath.startsWith("/chat") ? "授業を準備しています" : "ホームへ戻っています"
+                });
             }
 
             window.addEventListener("popstate", handlePopState);
             return function () {
                 window.removeEventListener("popstate", handlePopState);
+                if (transitionTimerRef.current) {
+                    window.clearTimeout(transitionTimerRef.current);
+                }
             };
         }, []);
 
-        function navigate(path) {
-            window.history.pushState({}, "", path);
-            setRoute(path);
-            window.scrollTo(0, 0);
+        function changeRoute(path, options) {
+            const settings = options || {};
+
+            if (!path || path === routeRef.current) {
+                return;
+            }
+
+            if (transitionTimerRef.current) {
+                window.clearTimeout(transitionTimerRef.current);
+            }
+
+            setTransitionDirection(settings.direction || "forward");
+            setTransitionMessage(settings.message || "授業を準備しています");
+            setScreenState("exiting");
+
+            transitionTimerRef.current = window.setTimeout(function () {
+                if (settings.updateHistory !== false) {
+                    window.history.pushState({}, "", path);
+                }
+
+                routeRef.current = path;
+                setRoute(path);
+                window.scrollTo({ top: 0, behavior: "auto" });
+                setScreenState("entering");
+
+                window.requestAnimationFrame(function () {
+                    setScreenState("entered");
+                });
+
+                window.setTimeout(function () {
+                    setTransitionMessage("");
+                }, 260);
+            }, 170);
         }
 
-        if (route.startsWith("/chat")) {
-            return h(ChatScreen, { route, navigate });
+        function navigate(path, options) {
+            changeRoute(path, {
+                direction: options && options.direction ? options.direction : "forward",
+                message: options && options.message ? options.message : "授業を準備しています"
+            });
         }
 
-        return h(HomeScreen, { navigate });
+        const screen = route.startsWith("/chat")
+            ? h(ChatScreen, { route, navigate })
+            : h(HomeScreen, { navigate });
+        const screenClass = [
+            "study-screen",
+            `study-screen-${screenState}`,
+            `study-screen-${transitionDirection}`
+        ].join(" ");
+
+        return h(
+            "div",
+            { className: "study-route-frame" },
+            transitionMessage
+                ? h(
+                    "div",
+                    { className: "route-loading", role: "status", "aria-live": "polite" },
+                    h("span", { className: "mini-spinner" }),
+                    transitionMessage
+                )
+                : null,
+            h("div", { className: screenClass }, screen)
+        );
+    }
+
+    function LoadingLabel({ text }) {
+        return h(
+            "span",
+            { className: "loading-label" },
+            h("span", { className: "mini-spinner" }),
+            text
+        );
+    }
+
+    function ThinkingBubble({ label }) {
+        return h(
+            "div",
+            { className: "study-message teacher-message thinking-message", role: "status", "aria-live": "polite" },
+            h("span", { className: "mini-spinner" }),
+            h("p", null, label || "先生が考えています")
+        );
     }
 
     function HomeScreen({ navigate }) {
         const [homeData, setHomeData] = useState(null);
         const [subject, setSubject] = useState("");
         const [creating, setCreating] = useState(false);
+        const [openingPath, setOpeningPath] = useState("");
         const [error, setError] = useState("");
 
         useEffect(function () {
@@ -106,12 +191,19 @@
                 });
 
                 if (data && data.url) {
-                    navigate(data.url);
+                    setOpeningPath(data.url);
+                    navigate(data.url, { message: "新しい授業を準備しています" });
                 }
             } catch (err) {
                 setError("科目チャットを作れませんでした。");
                 setCreating(false);
+                setOpeningPath("");
             }
+        }
+
+        function openStudyPath(path, message) {
+            setOpeningPath(path);
+            navigate(path, { message: message || "授業を準備しています" });
         }
 
         const examples = homeData ? homeData.subject_examples : [];
@@ -177,7 +269,11 @@
                         },
                         disabled: creating
                     }),
-                    h("button", { type: "submit", disabled: creating }, creating ? "作成中" : "+ 新しい学習")
+                    h(
+                        "button",
+                        { type: "submit", disabled: creating },
+                        creating ? h(LoadingLabel, { text: "作成中" }) : "+ 新しい学習"
+                    )
                 ),
                 examples && examples.length
                     ? h(
@@ -215,10 +311,12 @@
                         {
                             type: "button",
                             onClick: function () {
-                                navigate(`/chat/${nextThread.id}`);
+                                openStudyPath(`/chat/${nextThread.id}`, "前回の内容を確認しています");
                             }
                         },
-                        "続きから始める"
+                        openingPath === `/chat/${nextThread.id}`
+                            ? h(LoadingLabel, { text: "準備中" })
+                            : "続きから始める"
                     )
                 )
                 : null,
@@ -238,12 +336,16 @@
                                     type: "button",
                                     className: "study-history-row",
                                     onClick: function () {
-                                        navigate(item.url);
+                                        openStudyPath(item.url, "前回の内容を確認しています");
                                     }
                                 },
                                 h("span", null, item.day_label),
                                 h("strong", null, item.title),
-                                h("small", null, item.summary)
+                                h(
+                                    "small",
+                                    null,
+                                    openingPath === item.url ? h(LoadingLabel, { text: "準備中" }) : item.summary
+                                )
                             );
                         })
                     )
@@ -282,7 +384,7 @@
                                         type: "button",
                                         className: "study-thread-card",
                                         onClick: function () {
-                                            navigate(`/chat/${thread.id}`);
+                                            openStudyPath(`/chat/${thread.id}`, "授業を準備しています");
                                         }
                                     },
                                     h(
@@ -291,7 +393,13 @@
                                         h("strong", null, thread.display_title),
                                         h("small", null, context.last_studied_label || thread.latest_message)
                                     ),
-                                    h("em", null, context.streak_count ? `${context.streak_count}日` : "開始")
+                                    h(
+                                        "em",
+                                        null,
+                                        openingPath === `/chat/${thread.id}`
+                                            ? h("span", { className: "mini-spinner" })
+                                            : (context.streak_count ? `${context.streak_count}日` : "開始")
+                                    )
                                 );
                             })
                         )
@@ -309,6 +417,7 @@
         const [message, setMessage] = useState("");
         const [file, setFile] = useState(null);
         const [sending, setSending] = useState(false);
+        const [sendingLabel, setSendingLabel] = useState("");
         const [error, setError] = useState("");
         const fileInputRef = useRef(null);
 
@@ -340,7 +449,9 @@
         }, [apiPath]);
 
         useEffect(function () {
-            window.scrollTo(0, document.body.scrollHeight);
+            window.requestAnimationFrame(function () {
+                window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+            });
         }, [chatData, sending]);
 
         async function postTextMessage(cleanMessage, displayMessage) {
@@ -349,6 +460,7 @@
             }
 
             setSending(true);
+            setSendingLabel("先生が考えています");
             setError("");
             setChatData({
                 ...chatData,
@@ -371,6 +483,7 @@
                 setError("送信できませんでした。もう一度試してください。");
             } finally {
                 setSending(false);
+                setSendingLabel("");
             }
         }
 
@@ -389,6 +502,7 @@
             }
 
             setSending(true);
+            setSendingLabel("画像を読み取っています");
             setError("");
 
             const optimisticContent = file ? `[画像] ${cleanMessage || "この画像を解説して"}` : cleanMessage;
@@ -430,6 +544,7 @@
                 setError("送信できませんでした。もう一度試してください。");
             } finally {
                 setSending(false);
+                setSendingLabel("");
             }
         }
 
@@ -447,7 +562,7 @@
             }
 
             await api(`/api/chat_threads/${chatData.thread.id}`, { method: "DELETE" });
-            navigate("/");
+            navigate("/", { direction: "back", message: "ホームへ戻っています" });
         }
 
         const thread = chatData ? chatData.thread : null;
@@ -484,7 +599,7 @@
                         type: "button",
                         className: "plain-back",
                         onClick: function () {
-                            navigate("/");
+                            navigate("/", { direction: "back", message: "ホームへ戻っています" });
                         }
                     },
                     "戻る"
@@ -556,14 +671,14 @@
                             h("p", null, "分からないところをそのまま送ってください。写真でも大丈夫です。")
                         ),
                 sending
-                    ? h("div", { className: "study-message teacher-message" }, h("p", null, "考え中..."))
+                    ? h(ThinkingBubble, { label: sendingLabel })
                     : null
             ),
             h(
                 "form",
                 { className: "study-chat-form", onSubmit: sendMessage },
                 h("label", { className: file ? "image-picker has-file" : "image-picker" },
-                    "写真",
+                    sending && file ? h("span", { className: "mini-spinner" }) : (file ? "選択中" : "写真"),
                     h("input", {
                         ref: fileInputRef,
                         type: "file",
@@ -585,7 +700,11 @@
                     },
                     disabled: sending || !chatData
                 }),
-                h("button", { type: "submit", disabled: sending || !chatData || (!message.trim() && !file) }, sending ? "送信中" : "送信")
+                h(
+                    "button",
+                    { type: "submit", disabled: sending || !chatData || (!message.trim() && !file) },
+                    sending ? h(LoadingLabel, { text: "送信中" }) : "送信"
+                )
             )
         );
     }
