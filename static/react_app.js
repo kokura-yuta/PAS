@@ -343,10 +343,46 @@
             window.scrollTo(0, document.body.scrollHeight);
         }, [chatData, sending]);
 
+        async function postTextMessage(cleanMessage, displayMessage) {
+            if (!cleanMessage || !chatData || sending) {
+                return;
+            }
+
+            setSending(true);
+            setError("");
+            setChatData({
+                ...chatData,
+                messages: chatData.messages.concat([
+                    { role: "user", content: displayMessage || cleanMessage, created_at: "" }
+                ])
+            });
+            setMessage("");
+
+            try {
+                const data = await api(`/api/chat/${chatData.thread.id}/messages`, {
+                    method: "POST",
+                    body: JSON.stringify({ message: cleanMessage })
+                });
+
+                if (data) {
+                    setChatData(data);
+                }
+            } catch (err) {
+                setError("送信できませんでした。もう一度試してください。");
+            } finally {
+                setSending(false);
+            }
+        }
+
         async function sendMessage(event) {
             event.preventDefault();
 
             const cleanMessage = message.trim();
+
+            if (!file) {
+                await postTextMessage(cleanMessage);
+                return;
+            }
 
             if ((!cleanMessage && !file) || !chatData || sending) {
                 return;
@@ -397,6 +433,10 @@
             }
         }
 
+        function sendLessonAction(action) {
+            postTextMessage(action.message, action.label);
+        }
+
         async function deleteThread() {
             if (!chatData || !chatData.thread.can_delete) {
                 return;
@@ -413,6 +453,24 @@
         const thread = chatData ? chatData.thread : null;
         const messages = chatData ? chatData.messages : [];
         const context = thread && thread.study_context ? thread.study_context : {};
+        const lessonActions = [
+            {
+                label: "理解確認",
+                message: "ここまでの内容で、理解確認の問題を1問だけ出してください。"
+            },
+            {
+                label: "応用問題",
+                message: "今の内容を使った小さな応用問題を1問だけ出してください。"
+            },
+            {
+                label: "今日のまとめ",
+                message: "今日学んだ内容を短くまとめて、次に復習するポイントを教えてください。"
+            },
+            {
+                label: "今日はここまで",
+                message: "今日はここまでにします。学習レポートとして、今日できたこと、まだ曖昧なこと、次回やることを短くまとめてください。"
+            }
+        ];
 
         return h(
             "main",
@@ -457,6 +515,24 @@
                     )
                 )
                 : null,
+            h(
+                "section",
+                { className: "lesson-actions", "aria-label": "授業アクション" },
+                lessonActions.map(function (action) {
+                    return h(
+                        "button",
+                        {
+                            key: action.label,
+                            type: "button",
+                            onClick: function () {
+                                sendLessonAction(action);
+                            },
+                            disabled: sending || !chatData
+                        },
+                        action.label
+                    );
+                })
+            ),
             error ? h("p", { className: "notice" }, error) : null,
             h(
                 "section",

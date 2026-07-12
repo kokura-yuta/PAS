@@ -437,6 +437,31 @@ body:has(.study-app) {
     font-weight: 750;
 }
 
+.lesson-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 14px;
+}
+
+.lesson-actions button {
+    min-height: 38px;
+    padding: 0 13px;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.68);
+    color: var(--study-text);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+}
+
+.lesson-actions button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
 .study-chat-log {
     display: flex;
     flex-direction: column;
