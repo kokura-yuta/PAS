@@ -21,6 +21,19 @@ PAS v1.3 foundation
 - v1.3 foundation: Timeline Memory、PAS Calendar、予定の作成・編集・削除
 - v1.3.1: Reactフロントエンド基礎、FastAPI JSON API、Reactホーム・Reactチャット
 
+## PAS v2.0の設計思想
+
+PASは「機能を選んで使うAI」ではなく、「会話するだけで必要なことをAIが自動で理解・整理するAI」を目指します。
+
+ユーザーに、日記、目標更新、予定登録、Memory編集などを意識させすぎず、自然な会話の裏側でCore Memory、Timeline Memory、予定、目標、感情、価値観、思考パターンを更新していきます。
+
+新機能を作る前に、次を確認します。
+
+- ユーザーの入力を増やしすぎていないか
+- AIが会話から理解できないか
+- 一般論ではなく、その人専用の意見を返せるか
+- 「世界で一番その人を理解するAI」というコンセプトを強くしているか
+
 ## 現在できること
 
 - FastAPIでWebアプリを起動
@@ -77,6 +90,7 @@ uvicorn main:app --reload
 OPENAI_API_KEY=your_openai_api_key
 DATABASE_URL=your_postgresql_url
 SESSION_SECRET_KEY=your_session_secret_key
+APP_TIMEZONE=Asia/Tokyo
 ```
 
 ## Render設定

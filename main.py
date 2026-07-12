@@ -15,7 +15,8 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, or_
 from sqlalchemy.exc import IntegrityError
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 load_dotenv()
@@ -25,6 +26,7 @@ CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
 THREAD_TITLE_MAX_LENGTH = 50
 PASSWORD_MIN_LENGTH = 8
+APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
@@ -74,6 +76,33 @@ class ChatThreadCreatePayload(BaseModel):
 
 class ChatMessageCreatePayload(BaseModel):
     message: str = ""
+
+
+def get_app_timezone():
+    try:
+        return ZoneInfo(APP_TIMEZONE)
+    except ZoneInfoNotFoundError:
+        return timezone(timedelta(hours=9))
+
+
+def app_now():
+    return datetime.now(get_app_timezone()).replace(tzinfo=None)
+
+
+def get_today_range():
+    now = datetime.now(get_app_timezone())
+    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_end = today_start + timedelta(days=1)
+
+    return today_start.replace(tzinfo=None), today_end.replace(tzinfo=None)
+
+
+def format_current_datetime_for_prompt():
+    now = datetime.now(get_app_timezone())
+    weekday_labels = ["月", "火", "水", "木", "金", "土", "日"]
+    weekday = weekday_labels[now.weekday()]
+
+    return f"{now.strftime('%Y-%m-%d')}（{weekday}）{now.strftime('%H:%M')} / timezone:{APP_TIMEZONE}"
 
 
 def truncate_text(text, max_length=60):
@@ -159,7 +188,7 @@ class User(Base):
     name = Column(String(100))
     email = Column(String(255), unique=True, index=True)
     password_hash = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 class ChatMessage(Base):
     __tablename__="chat_messages"
@@ -169,7 +198,7 @@ class ChatMessage(Base):
     thread_id = Column(Integer, index=True)
     role = Column(String(20))
     content = Column(Text)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 class ChatThread(Base):
     __tablename__ = "chat_threads"
@@ -178,8 +207,8 @@ class ChatThread(Base):
     user_id = Column(Integer, index=True)
     title = Column(String(200))
     thread_type = Column(String(50), default="custom")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
 class Memory(Base):
@@ -195,7 +224,7 @@ class Memory(Base):
     status = Column(String(50), default="confirmed")
     is_active = Column(Boolean, default=True)
     last_confirmed_at = Column(DateTime)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 class Profile(Base):
     __tablename__ = "profiles"
@@ -218,7 +247,7 @@ class Profile(Base):
     success_feelings = Column(Text)
     success_lessons = Column(Text)
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 class Goal(Base):
     __tablename__ = "goals"
@@ -233,7 +262,7 @@ class Goal(Base):
     priority = Column(String(50), default="medium")
     deadline = Column(String(100))
 
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 class Settings(Base):
     __tablename__ = "settings"
@@ -244,7 +273,7 @@ class Settings(Base):
     default_persona = Column(String(50), default="friend")
     theme_name = Column(String(50), default="calm")
     response_length = Column(String(50), default="auto")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
 
 
 class TimelineMemory(Base):
@@ -262,8 +291,8 @@ class TimelineMemory(Base):
     importance = Column(Integer, default=3)
     confidence = Column(Float, default=0.7)
     source_type = Column(String(50), default="user_statement")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
 class CalendarEvent(Base):
@@ -276,7 +305,7 @@ class CalendarEvent(Base):
     start_datetime = Column(DateTime)
     end_datetime = Column(DateTime)
     location = Column(String(255))
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
 Base.metadata.create_all(bind=engine)
@@ -523,7 +552,7 @@ def load_chat_threads(user_id):
                 thread_order = 1
             else:
                 thread_order = 2
-            updated_at = thread.updated_at or thread.created_at or datetime.utcnow()
+            updated_at = thread.updated_at or thread.created_at or app_now()
             return (thread_order, -updated_at.timestamp())
 
         thread_items = []
@@ -624,7 +653,7 @@ def save_message(role, content, thread_id=None, user_id=None):
             )
 
             if thread:
-                thread.updated_at = datetime.utcnow()
+                thread.updated_at = app_now()
 
         db.commit()
     finally:
@@ -722,7 +751,7 @@ def save_memory(
             source_type=source_type,
             status=status,
             is_active=True,
-            last_confirmed_at=datetime.utcnow() if status == "confirmed" else None
+            last_confirmed_at=app_now() if status == "confirmed" else None
         )
 
         db.add(new_memory)
@@ -780,7 +809,7 @@ def save_or_update_memory(
 
             if current_status == "confirmed" or status == "confirmed":
                 existing_memory.status = "confirmed"
-                existing_memory.last_confirmed_at = datetime.utcnow()
+                existing_memory.last_confirmed_at = app_now()
             else:
                 existing_memory.status = "pending"
 
@@ -796,7 +825,7 @@ def save_or_update_memory(
             source_type=source_type,
             status=status,
             is_active=True,
-            last_confirmed_at=datetime.utcnow() if status == "confirmed" else None
+            last_confirmed_at=app_now() if status == "confirmed" else None
         )
 
         db.add(new_memory)
@@ -900,7 +929,7 @@ def confirm_memory(memory_id, user_id):
         if memory:
             memory.status = "confirmed"
             memory.confidence = max(normalize_confidence(memory.confidence), 0.9)
-            memory.last_confirmed_at = datetime.utcnow()
+            memory.last_confirmed_at = app_now()
             db.commit()
     finally:
         db.close()
@@ -933,7 +962,7 @@ def update_memory(memory_id, user_id, content, category, importance=3, confidenc
             memory.confidence = confidence
             memory.source_type = "user_statement"
             memory.status = "confirmed"
-            memory.last_confirmed_at = datetime.utcnow()
+            memory.last_confirmed_at = app_now()
             db.commit()
     finally:
         db.close()
@@ -1349,7 +1378,7 @@ def update_calendar_event(user_id, calendar_event_id, title, description, start_
         calendar_event.start_datetime = start_value
         calendar_event.end_datetime = end_value
         calendar_event.location = location
-        calendar_event.updated_at = datetime.utcnow()
+        calendar_event.updated_at = app_now()
         db.commit()
         return True, "予定を更新しました。"
     finally:
@@ -1424,8 +1453,7 @@ def format_calendar_for_prompt(calendar_items):
 
 
 def load_home_snapshot(user_id):
-    today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-    today_end = today_start + timedelta(days=1)
+    today_start, today_end = get_today_range()
     next_week_end = today_start + timedelta(days=7)
 
     db = SessionLocal()
@@ -1693,6 +1721,9 @@ PAS_RESPONSE_RULES = """
 - アドバイスより先に、共感か確認質問を優先してください。
 - 1回の返信で質問は原則1つだけにしてください。
 - 短い発言には短く返してください。短い雑談に長文で返すのは禁止です。
+- ユーザーに「Goal Plannerを開く」「Memoryを編集する」などの操作をすぐ求めないでください。
+- 普通の会話の中から、目標・予定・感情・価値観・重要な出来事を理解する姿勢で返してください。
+- PASの価値は機能数ではなく、ユーザーを長期的に理解し続けることにあります。
 
 相談・意思決定への返答:
 1. 気持ちを短く受け止める
@@ -1893,11 +1924,19 @@ def build_ai_prompt(
     length_prompt = RESPONSE_LENGTH_PROMPTS.get(response_length, RESPONSE_LENGTH_PROMPTS["balanced"])
     response_style_prompt = build_response_style_prompt(message, response_length, thread_type)
     thread_prompt = build_thread_prompt(thread_title, thread_type)
+    current_datetime_text = format_current_datetime_for_prompt()
     return f"""
 {persona_prompt}
 
 PASの返答ルール:
 {PAS_RESPONSE_RULES}
+
+現在日時:
+{current_datetime_text}
+
+日付の扱い:
+「今日」「明日」「昨日」「来週」などの相対日付は、必ず上の現在日時とタイムゾーンを基準に判断してください。
+日付が関係する返答では、必要に応じて具体的な日付も添えてください。
 
 チャットの種類:
 {thread_prompt}
@@ -2043,7 +2082,7 @@ def process_chat_message(thread, user_id, clean_message):
         chat_items.append({
             "role": "assistant",
             "content": ai_message,
-            "created_at": datetime.utcnow()
+            "created_at": app_now()
         })
 
     return chat_items
