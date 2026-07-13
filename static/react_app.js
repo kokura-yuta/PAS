@@ -130,6 +130,8 @@
             screen = h(ChatScreen, { route, navigate });
         } else if (route === "/bookshelves") {
             screen = h(BookshelvesScreen, { navigate });
+        } else if (route === "/roadmaps") {
+            screen = h(RoadmapsScreen, { navigate });
         } else if (route.startsWith("/bookshelf/")) {
             screen = h(BookshelfScreen, { route, navigate });
         } else if (route.startsWith("/textbook/")) {
@@ -291,6 +293,16 @@
                                 }
                             },
                             "本棚"
+                        ),
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: function () {
+                                    navigate("/roadmaps", { message: "ロードマップを開いています" });
+                                }
+                            },
+                            "ロードマップ"
                         ),
                         h("a", { href: "/memories" }, "Memory"),
                         h(
@@ -463,6 +475,184 @@
                             h("p", null, "まだ授業はありません。まずは勉強したい科目を追加してください。")
                         )
             )
+        );
+    }
+
+    function RoadmapsScreen({ navigate }) {
+        const [data, setData] = useState(null);
+        const [error, setError] = useState("");
+
+        useEffect(function () {
+            let active = true;
+
+            api("/api/roadmaps")
+                .then(function (response) {
+                    if (active) {
+                        setData(response);
+                    }
+                })
+                .catch(function () {
+                    if (active) {
+                        setError("ロードマップを読み込めませんでした。");
+                    }
+                });
+
+            return function () {
+                active = false;
+            };
+        }, []);
+
+        const subjects = data ? data.subjects || [] : [];
+        const statusLabels = {
+            learned: "理解済み",
+            learning: "学習中",
+            review: "復習",
+            not_started: "未学習"
+        };
+
+        function openSubjectLesson(subject) {
+            if (subject.chat_url) {
+                navigate(subject.chat_url, { message: `${subject.subject}の授業を準備しています` });
+                return;
+            }
+
+            navigate(subject.bookshelf_url, { message: "本棚を開いています" });
+        }
+
+        return h(
+            "main",
+            { className: "study-app study-library roadmap-page" },
+            h(
+                "header",
+                { className: "study-chat-header library-header" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "plain-back",
+                        onClick: function () {
+                            navigate("/", { direction: "back", message: "ホームへ戻っています" });
+                        }
+                    },
+                    "戻る"
+                ),
+                h(
+                    "div",
+                    { className: "library-title-block" },
+                    h("p", { className: "eyebrow" }, "Roadmap"),
+                    h("h1", null, "学習ロードマップ")
+                ),
+                h("span", null)
+            ),
+            h(
+                "section",
+                { className: "library-intro roadmap-intro" },
+                h("p", { className: "section-kicker" }, "同じ地図を見る"),
+                h("h2", null, "先生と同じロードマップで、今いる場所を確認する。"),
+                h("p", null, "順番はおすすめです。好きな教材や単元から始めても、先生が必要な前提知識を補いながら進めます。")
+            ),
+            error ? h("p", { className: "notice" }, error) : null,
+            !data
+                ? h("p", { className: "react-loading" }, "読み込み中")
+                : subjects.length
+                    ? h(
+                        "section",
+                        { className: "roadmap-overview-list" },
+                        subjects.map(function (subject) {
+                            return h(
+                                "article",
+                                { key: subject.subject, className: "roadmap-subject-card" },
+                                h(
+                                    "div",
+                                    { className: "roadmap-subject-head" },
+                                    h(
+                                        "div",
+                                        null,
+                                        h("p", { className: "section-kicker" }, "教材ロードマップ"),
+                                        h("h2", null, subject.subject)
+                                    ),
+                                    h(
+                                        "button",
+                                        {
+                                            type: "button",
+                                            onClick: function () {
+                                                openSubjectLesson(subject);
+                                            }
+                                        },
+                                        "授業へ"
+                                    )
+                                ),
+                                h(
+                                    "div",
+                                    { className: "roadmap-summary-pills" },
+                                    h("span", null, `理解度 ${subject.understanding_percent || 0}%`),
+                                    h("span", null, subject.current_item ? `現在地 ${subject.current_item.title}` : "現在地 未設定"),
+                                    h("span", null, subject.next_item ? `次の候補 ${subject.next_item.title}` : "次の候補なし")
+                                ),
+                                h(
+                                    "div",
+                                    { className: "roadmap-materials" },
+                                    h("h3", null, "教材"),
+                                    subject.textbooks && subject.textbooks.length
+                                        ? h(
+                                            "div",
+                                            { className: "material-list" },
+                                            subject.textbooks.map(function (textbook) {
+                                                return h(
+                                                    "button",
+                                                    {
+                                                        key: textbook.id,
+                                                        type: "button",
+                                                        className: "material-card",
+                                                        onClick: function () {
+                                                            navigate(textbook.url, { message: "教材を開いています" });
+                                                        }
+                                                    },
+                                                    h("strong", null, textbook.title),
+                                                    h("small", null, `更新 ${textbook.updated_at || "-"}`)
+                                                );
+                                            })
+                                        )
+                                        : h("p", { className: "roadmap-empty-text" }, "この分野の教材はまだありません。授業から教科書を作るとここに並びます。")
+                                ),
+                                h(
+                                    "div",
+                                    { className: "roadmap-map" },
+                                    h("h3", null, "AIが見ている地図"),
+                                    h(
+                                        "div",
+                                        { className: "roadmap-list" },
+                                        subject.items.map(function (item, index) {
+                                            return h(
+                                                "button",
+                                                {
+                                                    key: item.id || `${subject.subject}-${item.title}`,
+                                                    type: "button",
+                                                    className: `roadmap-item roadmap-${item.status || "not_started"}`,
+                                                    onClick: function () {
+                                                        openSubjectLesson(subject);
+                                                    }
+                                                },
+                                                h("span", { className: "roadmap-step-number" }, String(index + 1).padStart(2, "0")),
+                                                h(
+                                                    "span",
+                                                    { className: "roadmap-item-body" },
+                                                    h("strong", null, item.title),
+                                                    h("small", null, item.reason || "この順番で進むと理解しやすくなります。")
+                                                ),
+                                                h("em", null, statusLabels[item.status] || "未学習")
+                                            );
+                                        })
+                                    )
+                                )
+                            );
+                        })
+                    )
+                    : h(
+                        "section",
+                        { className: "study-empty" },
+                        h("p", null, "まだロードマップはありません。まずは勉強したい科目を追加してください。")
+                    )
         );
     }
 
@@ -656,6 +846,7 @@
         const [usedHint, setUsedHint] = useState(false);
         const [submittingAnswer, setSubmittingAnswer] = useState(false);
         const [latestAssessment, setLatestAssessment] = useState(null);
+        const readingScrollRef = useRef(0);
 
         useEffect(function () {
             let active = true;
@@ -725,7 +916,7 @@
                     window.setTimeout(function () {
                         const result = document.querySelector(".assessment-result-card");
                         if (result) {
-                            result.scrollIntoView({ behavior: "smooth", block: "center" });
+                            result.scrollIntoView({ behavior: "smooth", block: "nearest" });
                         }
                     }, 80);
                 }
@@ -744,9 +935,25 @@
             window.setTimeout(function () {
                 const form = document.querySelector(".answer-submit-card");
                 if (form) {
-                    form.scrollIntoView({ behavior: "smooth", block: "center" });
+                    form.scrollIntoView({ behavior: "smooth", block: "nearest" });
                 }
             }, 80);
+        }
+
+        function rememberReadingScroll() {
+            readingScrollRef.current = window.scrollY;
+        }
+
+        function restoreReadingScroll() {
+            const scrollTop = readingScrollRef.current;
+
+            if (!scrollTop && scrollTop !== 0) {
+                return;
+            }
+
+            window.setTimeout(function () {
+                window.scrollTo({ top: scrollTop, behavior: "auto" });
+            }, 40);
         }
 
         const textbook = data ? data.textbook : null;
@@ -1013,6 +1220,9 @@
                             h("textarea", {
                                 value: answerText,
                                 placeholder: answerPlaceholder,
+                                onPointerDown: rememberReadingScroll,
+                                onTouchStart: rememberReadingScroll,
+                                onFocus: restoreReadingScroll,
                                 onChange: function (event) {
                                     setAnswerText(event.target.value);
                                 },

@@ -779,6 +779,10 @@ body:has(.study-app) {
     gap: 28px;
 }
 
+.study-textbook-page {
+    gap: 20px;
+}
+
 .library-header {
     margin-bottom: 4px;
 }
@@ -795,6 +799,20 @@ body:has(.study-app) {
     justify-self: start;
 }
 
+.study-textbook-page .study-chat-header {
+    margin-bottom: -4px;
+    padding-top: 14px;
+    padding-bottom: 12px;
+}
+
+.study-textbook-page .library-header {
+    grid-template-columns: 56px minmax(0, 1fr) 56px;
+}
+
+.study-textbook-page .plain-back {
+    font-size: 13px;
+}
+
 .library-title-block,
 .textbook-title-block {
     min-width: 0;
@@ -806,6 +824,16 @@ body:has(.study-app) {
     margin-right: auto;
     margin-left: auto;
     max-width: 680px;
+}
+
+.study-textbook-page .textbook-title-block h1 {
+    display: -webkit-box;
+    max-width: 560px;
+    overflow: hidden;
+    font-size: clamp(20px, 5.4vw, 25px);
+    line-height: 1.18;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 3;
 }
 
 .library-intro {
@@ -875,6 +903,112 @@ body:has(.study-app) {
 .textbook-card strong {
     font-size: 22px;
     line-height: 1.35;
+}
+
+.roadmap-overview-list {
+    display: grid;
+    gap: 18px;
+    justify-self: center;
+    width: min(100%, 820px);
+}
+
+.roadmap-subject-card {
+    display: grid;
+    gap: 20px;
+    padding: 22px;
+    border: 1px solid var(--study-line);
+    border-radius: 26px;
+    background: var(--study-surface-strong);
+    box-shadow: 0 18px 52px rgba(21, 23, 25, 0.08);
+}
+
+.roadmap-subject-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.roadmap-subject-head h2,
+.roadmap-materials h3,
+.roadmap-map h3 {
+    margin: 0;
+    line-height: 1.3;
+}
+
+.roadmap-subject-head h2 {
+    font-size: 28px;
+}
+
+.roadmap-subject-head button {
+    flex-shrink: 0;
+    min-height: 42px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-accent);
+    color: #ffffff;
+    font: inherit;
+    font-size: 14px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.roadmap-summary-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.roadmap-summary-pills span {
+    padding: 7px 11px;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    background: rgba(21, 23, 25, 0.04);
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 850;
+}
+
+.roadmap-materials,
+.roadmap-map {
+    display: grid;
+    gap: 12px;
+}
+
+.material-list {
+    display: grid;
+    gap: 10px;
+}
+
+.material-card {
+    display: grid;
+    gap: 6px;
+    width: 100%;
+    padding: 15px;
+    border: 1px solid var(--study-line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--study-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.material-card strong {
+    font-size: 16px;
+    line-height: 1.45;
+}
+
+.material-card small,
+.roadmap-empty-text {
+    color: var(--study-muted);
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.roadmap-empty-text {
+    margin: 0;
 }
 
 .textbook-meta-card {
@@ -1041,13 +1175,18 @@ body:has(.study-app) {
     grid-template-columns: auto minmax(0, 1fr) auto;
     gap: 12px;
     align-items: start;
+    width: 100%;
     padding: 15px;
     border: 1px solid var(--study-line);
     border-radius: 18px;
     background: rgba(255, 255, 255, 0.68);
+    color: var(--study-text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
 }
 
-.roadmap-item > span {
+.roadmap-step-number {
     display: grid;
     place-items: center;
     width: 34px;
@@ -1057,6 +1196,11 @@ body:has(.study-app) {
     color: var(--study-muted);
     font-size: 12px;
     font-weight: 850;
+}
+
+.roadmap-item-body {
+    display: block;
+    min-width: 0;
 }
 
 .roadmap-item em {
@@ -1165,7 +1309,7 @@ body:has(.study-app) {
 }
 
 .answer-problem-preview pre {
-    max-height: 190px;
+    max-height: 140px;
     margin: 0;
     overflow: auto;
     color: var(--study-text);
@@ -1182,7 +1326,8 @@ body:has(.study-app) {
 
 .answer-form textarea {
     width: 100%;
-    min-height: 150px;
+    min-height: 120px;
+    max-height: 34svh;
     padding: 16px;
     border: 1px solid var(--study-line);
     border-radius: 18px;
@@ -1570,6 +1715,21 @@ body:has(.study-app) {
         font-size: 24px;
     }
 
+    .study-textbook-page .study-chat-header {
+        margin: -28px -20px -6px;
+        padding: 12px 14px 10px;
+    }
+
+    .study-textbook-page .library-header {
+        grid-template-columns: 46px minmax(0, 1fr) 46px;
+    }
+
+    .study-textbook-page .textbook-title-block h1 {
+        max-width: 320px;
+        font-size: 22px;
+        line-height: 1.16;
+    }
+
     .study-context {
         border-radius: 18px;
     }
@@ -1624,6 +1784,23 @@ body:has(.study-app) {
         font-size: 20px;
     }
 
+    .roadmap-subject-card {
+        padding: 18px;
+        border-radius: 22px;
+    }
+
+    .roadmap-subject-head {
+        display: grid;
+    }
+
+    .roadmap-subject-head h2 {
+        font-size: 24px;
+    }
+
+    .roadmap-subject-head button {
+        width: 100%;
+    }
+
     .textbook-reader {
         padding: 18px;
         border-radius: 22px;
@@ -1661,7 +1838,12 @@ body:has(.study-app) {
     }
 
     .answer-form textarea {
-        min-height: 132px;
+        min-height: 108px;
+        max-height: 28svh;
+    }
+
+    .answer-problem-preview pre {
+        max-height: 112px;
     }
 
     .review-suggestion-list article {

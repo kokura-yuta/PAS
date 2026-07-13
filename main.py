@@ -1751,6 +1751,96 @@ def load_bookshelf(subject, user_id):
         db.close()
 
 
+def load_roadmap_overview(user_id):
+    db = SessionLocal()
+
+    try:
+        subject_names = set()
+        textbooks_by_subject = {}
+
+        study_threads = (
+            db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
+            .filter(ChatThread.thread_type == STUDY_THREAD_TYPE)
+            .order_by(ChatThread.updated_at.desc().nullslast(), ChatThread.created_at.desc())
+            .all()
+        )
+
+        chat_urls = {}
+
+        for thread in study_threads:
+            subject = normalize_subject_title(thread.title) or "学習相談"
+            subject_names.add(subject)
+            chat_urls.setdefault(subject, f"/chat/{thread.id}")
+
+        textbooks = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.user_id == user_id)
+            .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+            .all()
+        )
+
+        for textbook in textbooks:
+            subject = normalize_subject_title(textbook.subject) or "学習相談"
+            subject_names.add(subject)
+            textbooks_by_subject.setdefault(subject, []).append(textbook)
+
+        roadmaps = []
+
+        for subject in sorted(subject_names):
+            subject_textbooks = textbooks_by_subject.get(subject, [])
+            understandings = (
+                db.query(StudyUnderstanding)
+                .filter(StudyUnderstanding.user_id == user_id)
+                .filter(StudyUnderstanding.subject == subject)
+                .order_by(StudyUnderstanding.updated_at.desc())
+                .all()
+            )
+            roadmap_items = load_or_create_roadmap(db, user_id, subject, subject_textbooks, understandings)
+            subject_understanding = next(
+                (
+                    item
+                    for item in understandings
+                    if item.scope_type == "subject"
+                ),
+                None
+            )
+            current_item = next(
+                (
+                    item
+                    for item in roadmap_items
+                    if item["status"] in ["learning", "review"]
+                ),
+                None
+            )
+            next_item = next(
+                (
+                    item
+                    for item in roadmap_items
+                    if item["status"] == "not_started"
+                ),
+                None
+            )
+
+            roadmaps.append({
+                "subject": subject,
+                "chat_url": chat_urls.get(subject, ""),
+                "bookshelf_url": f"/bookshelf/{quote(subject)}",
+                "understanding_percent": subject_understanding.percent if subject_understanding else 0,
+                "current_item": current_item,
+                "next_item": next_item,
+                "textbooks": [
+                    serialize_textbook_summary(textbook)
+                    for textbook in subject_textbooks
+                ],
+                "items": roadmap_items
+            })
+
+        return roadmaps
+    finally:
+        db.close()
+
+
 def load_textbook_options_for_subject(subject, user_id):
     clean_subject = normalize_subject_title(subject)
 
@@ -4790,6 +4880,18 @@ def api_bookshelf(request: Request, subject: str):
     return load_bookshelf(subject, current_user.id)
 
 
+@app.get("/api/roadmaps")
+def api_roadmaps(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    return {
+        "subjects": load_roadmap_overview(current_user.id)
+    }
+
+
 @app.get("/api/textbooks/{textbook_id}")
 def api_textbook_detail(request: Request, textbook_id: int):
     current_user = get_current_user(request)
@@ -4907,6 +5009,16 @@ def bookshelves_page(request: Request):
 
 @app.get("/bookshelf/{subject}")
 def bookshelf_page(request: Request, subject: str):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return render_react_app(request, current_user)
+
+
+@app.get("/roadmaps")
+def roadmaps_page(request: Request):
     current_user = get_current_user(request)
 
     if current_user is None:
