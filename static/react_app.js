@@ -647,11 +647,19 @@
         const textbookId = textbookIdMatch ? textbookIdMatch[1] : "";
         const [data, setData] = useState(null);
         const [error, setError] = useState("");
+        const [answerType, setAnswerType] = useState("check");
+        const [answerText, setAnswerText] = useState("");
+        const [usedHint, setUsedHint] = useState(false);
+        const [submittingAnswer, setSubmittingAnswer] = useState(false);
+        const [latestAssessment, setLatestAssessment] = useState(null);
 
         useEffect(function () {
             let active = true;
             setData(null);
             setError("");
+            setAnswerText("");
+            setUsedHint(false);
+            setLatestAssessment(null);
 
             api(`/api/textbooks/${textbookId}`)
                 .then(function (response) {
@@ -670,10 +678,62 @@
             };
         }, [textbookId]);
 
+        async function submitTextbookAnswer(event) {
+            event.preventDefault();
+
+            const cleanAnswer = answerText.trim();
+
+            if (!cleanAnswer || submittingAnswer || !textbook) {
+                return;
+            }
+
+            setSubmittingAnswer(true);
+            setError("");
+
+            try {
+                const response = await api(`/api/textbooks/${textbook.id}/answers`, {
+                    method: "POST",
+                    body: JSON.stringify({
+                        answer_type: answerType,
+                        answer_text: cleanAnswer,
+                        used_hint: usedHint
+                    })
+                });
+
+                if (response) {
+                    setData({ textbook: response.textbook });
+                    setLatestAssessment(response.assessment);
+                    setAnswerText("");
+                    setUsedHint(false);
+                    window.setTimeout(function () {
+                        const result = document.querySelector(".assessment-result-card");
+                        if (result) {
+                            result.scrollIntoView({ behavior: "smooth", block: "center" });
+                        }
+                    }, 80);
+                }
+            } catch (err) {
+                setError("回答を添削できませんでした。もう一度試してください。");
+            } finally {
+                setSubmittingAnswer(false);
+            }
+        }
+
         const textbook = data ? data.textbook : null;
         const sections = textbook ? textbook.sections.filter(function (section) {
             return section.content && section.content.trim();
         }) : [];
+        const understandings = textbook ? textbook.understandings || [] : [];
+        const subjectUnderstanding = understandings.find(function (item) {
+            return item.scope_type === "subject";
+        });
+        const textbookUnderstanding = understandings.find(function (item) {
+            return item.scope_type === "textbook";
+        });
+        const itemUnderstandings = understandings.filter(function (item) {
+            return item.scope_type === "item";
+        });
+        const assessments = textbook ? textbook.assessments || [] : [];
 
         return h(
             "main",
@@ -718,17 +778,158 @@
                         h("span", null, textbook.subject)
                     ),
                     h(
+                        "section",
+                        { className: "understanding-panel" },
+                        h("p", { className: "section-kicker" }, "理解度"),
+                        h(
+                            "div",
+                            { className: "understanding-summary" },
+                            h(
+                                "div",
+                                null,
+                                h("span", null, `${textbook.subject}全体`),
+                                h("strong", null, `${subjectUnderstanding ? subjectUnderstanding.percent : 0}%`),
+                                h("small", null, subjectUnderstanding ? `変化 ${subjectUnderstanding.delta_percent >= 0 ? "+" : ""}${subjectUnderstanding.delta_percent}%` : "まだ未測定")
+                            ),
+                            h(
+                                "div",
+                                null,
+                                h("span", null, "この教科書"),
+                                h("strong", null, `${textbookUnderstanding ? textbookUnderstanding.percent : 0}%`),
+                                h("small", null, textbookUnderstanding ? `変化 ${textbookUnderstanding.delta_percent >= 0 ? "+" : ""}${textbookUnderstanding.delta_percent}%` : "回答すると更新")
+                            )
+                        ),
+                        itemUnderstandings.length
+                            ? h(
+                                "div",
+                                { className: "item-understanding-list" },
+                                itemUnderstandings.map(function (item) {
+                                    return h(
+                                        "div",
+                                        { key: item.id, className: "item-understanding" },
+                                        h("span", null, item.item_name),
+                                        h("strong", null, `${item.percent}%`),
+                                        h("small", null, `${item.delta_percent >= 0 ? "+" : ""}${item.delta_percent}%`)
+                                    );
+                                })
+                            )
+                            : h("p", { className: "understanding-empty" }, "問題に回答すると、項目ごとの理解度が表示されます。")
+                    ),
+                    h(
                         "article",
                         { className: "textbook-reader" },
                         sections.map(function (section) {
+                            const blockSection = section.key === "code_example" || section.key === "visual_diagram";
+
                             return h(
                                 "section",
                                 { key: section.key, className: "textbook-section" },
                                 h("h2", null, section.label),
-                                h("p", null, section.content)
+                                blockSection
+                                    ? h(
+                                        "pre",
+                                        { className: section.key === "code_example" ? "textbook-code-block" : "textbook-diagram-block" },
+                                        h("code", null, section.content)
+                                    )
+                                    : h("p", null, section.content)
                             );
                         })
                     ),
+                    latestAssessment
+                        ? h(
+                            "section",
+                            { className: "assessment-result-card" },
+                            h("p", { className: "section-kicker" }, "AI添削"),
+                            h("h2", null, `今回の定着度 ${latestAssessment.score_percent}%`),
+                            h("p", null, latestAssessment.feedback),
+                            latestAssessment.understood_points
+                                ? h("p", null, `理解できている点: ${latestAssessment.understood_points}`)
+                                : null,
+                            latestAssessment.weak_points
+                                ? h("p", null, `苦手ポイント: ${latestAssessment.weak_points}`)
+                                : null,
+                            latestAssessment.next_review_content
+                                ? h("p", null, `次に復習する内容: ${latestAssessment.next_review_content}`)
+                                : null
+                        )
+                        : null,
+                    h(
+                        "section",
+                        { className: "answer-submit-card" },
+                        h("p", { className: "section-kicker" }, "問題に回答する"),
+                        h("h2", null, "解いた答えを先生に添削してもらう"),
+                        h(
+                            "div",
+                            { className: "answer-type-tabs", role: "tablist" },
+                            [
+                                { key: "check", label: "理解確認" },
+                                { key: "application", label: "応用問題" },
+                                { key: "review", label: "復習" }
+                            ].map(function (item) {
+                                return h(
+                                    "button",
+                                    {
+                                        key: item.key,
+                                        type: "button",
+                                        className: answerType === item.key ? "active" : "",
+                                        onClick: function () {
+                                            setAnswerType(item.key);
+                                        }
+                                    },
+                                    item.label
+                                );
+                            })
+                        ),
+                        h(
+                            "form",
+                            { className: "answer-form", onSubmit: submitTextbookAnswer },
+                            h("textarea", {
+                                value: answerText,
+                                placeholder: "ここに自分の回答を書いてください。途中式や考え方も書くと、先生がより正確に添削できます。",
+                                onChange: function (event) {
+                                    setAnswerText(event.target.value);
+                                },
+                                disabled: submittingAnswer
+                            }),
+                            h(
+                                "label",
+                                { className: "hint-check" },
+                                h("input", {
+                                    type: "checkbox",
+                                    checked: usedHint,
+                                    onChange: function (event) {
+                                        setUsedHint(event.target.checked);
+                                    },
+                                    disabled: submittingAnswer
+                                }),
+                                "ヒントを使った"
+                            ),
+                            h(
+                                "button",
+                                {
+                                    type: "submit",
+                                    disabled: submittingAnswer || !answerText.trim()
+                                },
+                                submittingAnswer ? h(LoadingLabel, { text: "添削中" }) : "回答を提出する"
+                            )
+                        )
+                    ),
+                    assessments.length
+                        ? h(
+                            "section",
+                            { className: "assessment-history" },
+                            h("h2", null, "最近の添削"),
+                            assessments.map(function (assessment) {
+                                return h(
+                                    "article",
+                                    { key: assessment.id },
+                                    h("strong", null, `${assessment.score_percent}%`),
+                                    h("span", null, assessment.created_at),
+                                    h("p", null, assessment.feedback)
+                                );
+                            })
+                        )
+                        : null,
                     textbook.updates && textbook.updates.length
                         ? h(
                             "section",
@@ -950,6 +1151,13 @@
                         target_textbook_id: textbookPreview.target_textbook_id || null,
                         title: textbookPreview.title || "",
                         bookshelf_subject: textbookPreview.bookshelf_subject || chatData.thread.title,
+                        introduction: textbookPreview.introduction || "",
+                        learning_image: textbookPreview.learning_image || "",
+                        beginner_explanation: textbookPreview.beginner_explanation || "",
+                        visual_diagram: textbookPreview.visual_diagram || "",
+                        code_example: textbookPreview.code_example || "",
+                        code_walkthrough: textbookPreview.code_walkthrough || "",
+                        personal_points: textbookPreview.personal_points || "",
                         basic_explanation: textbookPreview.basic_explanation || "",
                         concrete_examples: textbookPreview.concrete_examples || "",
                         key_points: textbookPreview.key_points || "",
@@ -1107,12 +1315,27 @@
                         "details",
                         { className: "textbook-preview-details" },
                         h("summary", null, "内容を確認する"),
-                        ["basic_explanation", "key_points", "weak_points", "unclear_points", "check_questions", "application_questions"].map(function (field) {
+                        [
+                            "introduction",
+                            "learning_image",
+                            "beginner_explanation",
+                            "visual_diagram",
+                            "code_example",
+                            "code_walkthrough",
+                            "key_points",
+                            "personal_points",
+                            "check_questions",
+                            "application_questions"
+                        ].map(function (field) {
                             const labels = {
-                                basic_explanation: "基本説明",
-                                key_points: "重要ポイント",
-                                weak_points: "苦手ポイント",
-                                unclear_points: "まだ曖昧な内容",
+                                introduction: "導入",
+                                learning_image: "イメージ",
+                                beginner_explanation: "基本説明",
+                                visual_diagram: "図・流れ",
+                                code_example: "実際のコード・実例",
+                                code_walkthrough: "コード解説",
+                                key_points: "ここだけは覚えよう",
+                                personal_points: "あなた専用ポイント",
                                 check_questions: "理解確認問題",
                                 application_questions: "応用問題"
                             };

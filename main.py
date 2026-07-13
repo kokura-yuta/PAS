@@ -128,6 +128,13 @@ class TextbookConfirmPayload(BaseModel):
     target_textbook_id: int | None = None
     title: str = ""
     bookshelf_subject: str = ""
+    introduction: str = ""
+    learning_image: str = ""
+    beginner_explanation: str = ""
+    visual_diagram: str = ""
+    code_example: str = ""
+    code_walkthrough: str = ""
+    personal_points: str = ""
     basic_explanation: str = ""
     concrete_examples: str = ""
     key_points: str = ""
@@ -140,6 +147,12 @@ class TextbookConfirmPayload(BaseModel):
     detailed_explanations: str = ""
     related_textbooks: str = ""
     update_summary: str = ""
+
+
+class TextbookAnswerPayload(BaseModel):
+    answer_type: str = "check"
+    answer_text: str = ""
+    used_hint: bool = False
 
 
 def get_app_timezone():
@@ -386,6 +399,13 @@ class StudyTextbook(Base):
     thread_id = Column(Integer, index=True)
     subject = Column(String(100), index=True)
     title = Column(String(255))
+    introduction = Column(Text)
+    learning_image = Column(Text)
+    beginner_explanation = Column(Text)
+    visual_diagram = Column(Text)
+    code_example = Column(Text)
+    code_walkthrough = Column(Text)
+    personal_points = Column(Text)
     basic_explanation = Column(Text)
     concrete_examples = Column(Text)
     key_points = Column(Text)
@@ -409,6 +429,44 @@ class StudyTextbookUpdate(Base):
     textbook_id = Column(Integer, index=True)
     action_type = Column(String(50), default="created")
     summary = Column(Text)
+    created_at = Column(DateTime, default=app_now)
+
+
+class StudyUnderstanding(Base):
+    __tablename__ = "study_understandings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    textbook_id = Column(Integer, index=True)
+    scope_type = Column(String(50), index=True)
+    item_name = Column(String(255))
+    percent = Column(Integer, default=0)
+    previous_percent = Column(Integer, default=0)
+    delta_percent = Column(Integer, default=0)
+    evidence = Column(Text)
+    last_assessed_at = Column(DateTime)
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
+
+
+class StudyAssessment(Base):
+    __tablename__ = "study_assessments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    textbook_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    answer_type = Column(String(50), default="check")
+    answer_text = Column(Text)
+    feedback = Column(Text)
+    score_percent = Column(Integer, default=0)
+    understood_points = Column(Text)
+    weak_points = Column(Text)
+    unclear_points = Column(Text)
+    thinking_gap = Column(Text)
+    next_review_content = Column(Text)
+    used_hint = Column(Boolean, default=False)
     created_at = Column(DateTime, default=app_now)
 
 
@@ -472,7 +530,9 @@ def ensure_user_id_columns():
         "timeline_memories",
         "calendar_events",
         "study_textbooks",
-        "study_textbook_updates"
+        "study_textbook_updates",
+        "study_understandings",
+        "study_assessments"
     ]
 
     for table_name in user_tables:
@@ -480,6 +540,23 @@ def ensure_user_id_columns():
 
 
 ensure_user_id_columns()
+
+def ensure_study_textbook_chapter_columns():
+    ensure_columns(
+        "study_textbooks",
+        {
+            "introduction": "TEXT",
+            "learning_image": "TEXT",
+            "beginner_explanation": "TEXT",
+            "visual_diagram": "TEXT",
+            "code_example": "TEXT",
+            "code_walkthrough": "TEXT",
+            "personal_points": "TEXT"
+        }
+    )
+
+
+ensure_study_textbook_chapter_columns()
 
 def normalize_email(email):
     return (email or "").strip().lower()
@@ -594,7 +671,9 @@ def claim_unowned_data(user_id):
         "timeline_memories",
         "calendar_events",
         "study_textbooks",
-        "study_textbook_updates"
+        "study_textbook_updates",
+        "study_understandings",
+        "study_assessments"
     ]
 
     with engine.begin() as connection:
@@ -1123,9 +1202,16 @@ def load_study_memory_highlights(user_id, limit=4):
 
 
 TEXTBOOK_CONTENT_FIELDS = [
+    "introduction",
+    "learning_image",
+    "beginner_explanation",
+    "visual_diagram",
+    "code_example",
+    "code_walkthrough",
     "basic_explanation",
     "concrete_examples",
     "key_points",
+    "personal_points",
     "weak_points",
     "unclear_points",
     "common_mistakes",
@@ -1138,9 +1224,16 @@ TEXTBOOK_CONTENT_FIELDS = [
 
 
 TEXTBOOK_FIELD_LABELS = {
-    "basic_explanation": "基本説明",
-    "concrete_examples": "具体例",
-    "key_points": "重要ポイント",
+    "introduction": "導入",
+    "learning_image": "イメージ",
+    "beginner_explanation": "基本説明",
+    "visual_diagram": "図・流れ",
+    "code_example": "実際のコード・実例",
+    "code_walkthrough": "コード解説・流れ",
+    "basic_explanation": "補足説明",
+    "concrete_examples": "補足の具体例",
+    "key_points": "ここだけは覚えよう",
+    "personal_points": "あなた専用ポイント",
     "weak_points": "本人が苦手だったポイント",
     "unclear_points": "まだ曖昧な内容",
     "common_mistakes": "本人が間違えやすいポイント",
@@ -1172,7 +1265,38 @@ def serialize_textbook_update(update):
     }
 
 
-def serialize_textbook_detail(textbook, updates=None):
+def serialize_understanding(understanding):
+    return {
+        "id": understanding.id,
+        "subject": understanding.subject,
+        "scope_type": understanding.scope_type,
+        "item_name": understanding.item_name,
+        "percent": understanding.percent or 0,
+        "previous_percent": understanding.previous_percent or 0,
+        "delta_percent": understanding.delta_percent or 0,
+        "evidence": understanding.evidence or "",
+        "last_assessed_at": format_datetime(understanding.last_assessed_at)
+    }
+
+
+def serialize_assessment(assessment):
+    return {
+        "id": assessment.id,
+        "answer_type": assessment.answer_type,
+        "answer_text": assessment.answer_text or "",
+        "feedback": assessment.feedback or "",
+        "score_percent": assessment.score_percent or 0,
+        "understood_points": assessment.understood_points or "",
+        "weak_points": assessment.weak_points or "",
+        "unclear_points": assessment.unclear_points or "",
+        "thinking_gap": assessment.thinking_gap or "",
+        "next_review_content": assessment.next_review_content or "",
+        "used_hint": bool(assessment.used_hint),
+        "created_at": format_datetime(assessment.created_at)
+    }
+
+
+def serialize_textbook_detail(textbook, updates=None, understandings=None, assessments=None):
     sections = [
         {
             "key": field_name,
@@ -1189,6 +1313,14 @@ def serialize_textbook_detail(textbook, updates=None):
         "updates": [
             serialize_textbook_update(update)
             for update in (updates or [])
+        ],
+        "understandings": [
+            serialize_understanding(understanding)
+            for understanding in (understandings or [])
+        ],
+        "assessments": [
+            serialize_assessment(assessment)
+            for assessment in (assessments or [])
         ]
     }
 
@@ -1215,7 +1347,30 @@ def load_textbook(textbook_id, user_id):
             .all()
         )
 
-        return serialize_textbook_detail(textbook, updates)
+        understandings = (
+            db.query(StudyUnderstanding)
+            .filter(StudyUnderstanding.user_id == user_id)
+            .filter(
+                or_(
+                    StudyUnderstanding.textbook_id == textbook.id,
+                    StudyUnderstanding.scope_type == "subject"
+                )
+            )
+            .filter(StudyUnderstanding.subject == textbook.subject)
+            .order_by(StudyUnderstanding.scope_type.asc(), StudyUnderstanding.updated_at.desc())
+            .all()
+        )
+
+        assessments = (
+            db.query(StudyAssessment)
+            .filter(StudyAssessment.user_id == user_id)
+            .filter(StudyAssessment.textbook_id == textbook.id)
+            .order_by(StudyAssessment.created_at.desc())
+            .limit(5)
+            .all()
+        )
+
+        return serialize_textbook_detail(textbook, updates, understandings, assessments)
     finally:
         db.close()
 
@@ -1361,9 +1516,16 @@ def fallback_textbook_preview(thread, user_id, source_material):
         "target_textbook_title": first_existing["title"] if first_existing else "",
         "title": f"{thread.title}の授業まとめ",
         "bookshelf_subject": thread.title,
-        "basic_explanation": "直近の授業内容を、後から読み返せる形で整理します。",
-        "concrete_examples": source_material[:900],
-        "key_points": "授業で扱った重要な考え方を復習します。",
+        "introduction": f"今日は{thread.title}で扱った内容を、あとから読み返せる一章として整理します。この章を読むと、授業で出てきた考え方をもう一度たどれるようになります。",
+        "learning_image": "まずは、授業内容を机の上に並べた道具だと考えてみましょう。何に使う道具なのか、どの順番で使うのかを確認すると、全体像が見えやすくなります。",
+        "beginner_explanation": "専門用語だけで覚えるのではなく、何のために使うのかを先に確認します。細かい言葉は、使い道が分かってから覚えると理解しやすくなります。",
+        "visual_diagram": "授業内容\n  ↓\n大事な考え方\n  ↓\n例で確認\n  ↓\n自分で説明してみる",
+        "code_example": source_material[:900],
+        "code_walkthrough": "授業で出てきた例を、上から順番に確認します。どの行が何をしているのかを、次回の授業で一緒に深掘りできます。",
+        "basic_explanation": "",
+        "concrete_examples": "",
+        "key_points": "1. まず全体像をつかむ\n2. 言葉の意味より先に使い道を見る\n3. 自分の言葉で説明できるか確認する",
+        "personal_points": "あなたが会話の中で分かりにくそうだった部分を、次回の授業で重点的に確認します。",
         "weak_points": "会話の中で分かりにくそうだった内容を確認します。",
         "unclear_points": "まだ曖昧な内容は、次回の授業で先生に質問できます。",
         "common_mistakes": "似た言葉や処理の違いを混同しないように注意します。",
@@ -1424,8 +1586,15 @@ def create_textbook_preview(thread, user_id, source_note=""):
         response = client.responses.create(
             model="gpt-4.1-mini",
             input=f"""
-あなたはStudy PASの教科書編集者です。
-直近の授業内容から、ユーザー専用の教科書プレビューを作ってください。
+あなたはStudy PASの「教科書を編集する先生」です。
+直近の授業内容から、ユーザー専用の一章を執筆してください。
+
+最重要方針:
+- 情報を項目ごとに整理したAIメモを作らない。
+- 参考書や教科書のように、自然に読み進められる流れで書く。
+- 読者は初心者。専門用語を急に並べず、身近なイメージから入る。
+- 「先生が教材を書いている」文章にする。
+- 情報量より、読む順番と理解の流れを優先する。
 
 重要なルール:
 - ユーザーが承認する前なので、保存した前提で書かない。
@@ -1433,8 +1602,16 @@ def create_textbook_preview(thread, user_id, source_note=""):
 - 既存教科書に近い内容がある場合は mode を "update" にし、target_textbook_id に既存教科書のidを入れる。
 - 近い教科書がなければ mode を "create" にする。
 - 取得できない情報は無理に作らず、会話とMemoryから分かる範囲で書く。
+- introduction は「今日は〇〇について学びます」「この章を読むと何ができるか」から始める。
+- learning_image は料理・道具・学校・本など、身近なたとえで説明する。
+- beginner_explanation は専門用語をなるべく避け、初心者に向けて説明する。
+- visual_diagram は文章だけでなく、簡単なテキスト図やフローチャートを書く。
+- code_example はプログラミングなら実際のコードを書く。プログラミング以外なら、式・例文・問題例を書く。
+- code_walkthrough はコードや例を一行ずつ、なぜ必要かまで説明する。
+- key_points は最後に「ここだけは覚えよう」を3〜5個まとめる。
+- personal_points で初めてMemoryを使い、本人専用の注意点や説明方針を書く。
 - 理解確認問題は5問、応用問題は10問を作る。
-- 模範解答と詳しい解説も作る。
+- 模範解答と詳しい解説は、答えだけでなく考え方まで説明する。
 - 必ずJSONだけで返す。
 
 返答形式:
@@ -1443,9 +1620,16 @@ def create_textbook_preview(thread, user_id, source_note=""):
   "target_textbook_id": null,
   "title": "Pythonの戻り値（return）の基本と使い方",
   "bookshelf_subject": "{thread.title}",
+  "introduction": "",
+  "learning_image": "",
+  "beginner_explanation": "",
+  "visual_diagram": "",
+  "code_example": "",
+  "code_walkthrough": "",
   "basic_explanation": "",
   "concrete_examples": "",
   "key_points": "",
+  "personal_points": "",
   "weak_points": "",
   "unclear_points": "",
   "common_mistakes": "",
@@ -1473,7 +1657,7 @@ def create_textbook_preview(thread, user_id, source_note=""):
 {source_material}
 """
         )
-        preview_data = json.loads(response.output_text)
+        preview_data = parse_ai_json_object(response.output_text)
         return normalize_textbook_preview(preview_data, thread, user_id)
     except Exception:
         return fallback_textbook_preview(thread, user_id, source_material)
@@ -1535,6 +1719,13 @@ def confirm_textbook_preview(payload, user_id):
                 thread_id=thread.id,
                 subject=subject,
                 title=title,
+                introduction=payload.introduction,
+                learning_image=payload.learning_image,
+                beginner_explanation=payload.beginner_explanation,
+                visual_diagram=payload.visual_diagram,
+                code_example=payload.code_example,
+                code_walkthrough=payload.code_walkthrough,
+                personal_points=payload.personal_points,
                 basic_explanation=payload.basic_explanation,
                 concrete_examples=payload.concrete_examples,
                 key_points=payload.key_points,
@@ -1570,6 +1761,396 @@ def confirm_textbook_preview(payload, user_id):
         )
 
         return serialize_textbook_detail(textbook, updates)
+    finally:
+        db.close()
+
+
+def normalize_percent(value):
+    try:
+        percent = int(round(float(value)))
+    except (TypeError, ValueError):
+        percent = 0
+
+    return max(0, min(100, percent))
+
+
+def calculate_understanding_percent(previous_percent, ai_score, assessment_count):
+    previous_percent = normalize_percent(previous_percent)
+    ai_score = normalize_percent(ai_score)
+
+    if assessment_count <= 0:
+        cap = 78
+    elif assessment_count < 3:
+        cap = 88
+    elif assessment_count < 5:
+        cap = 95
+    elif previous_percent >= 95 and ai_score >= 95:
+        cap = 100
+    else:
+        cap = 97
+
+    capped_score = min(ai_score, cap)
+
+    if previous_percent <= 0:
+        return capped_score
+
+    if capped_score >= previous_percent:
+        return normalize_percent(previous_percent * 0.55 + capped_score * 0.45)
+
+    return normalize_percent(previous_percent * 0.72 + capped_score * 0.28)
+
+
+def fallback_assessment_result(answer_text):
+    return {
+        "score_percent": 45,
+        "feedback": "回答は受け取りました。AI添削に失敗したため、もう一度送ると詳しく確認できます。",
+        "understood_points": "回答しようとしている点は学習の材料になります。",
+        "weak_points": "どこが分かっているか、どこが曖昧かをもう少し分けて確認する必要があります。",
+        "unclear_points": "回答内容からは、理解できている範囲を十分に判断できませんでした。",
+        "thinking_gap": "考え方のずれは未判定です。",
+        "next_review_content": "教科書の基本説明と重要ポイントを読み直してから、もう一度回答してみてください。",
+        "item_scores": []
+    }
+
+
+def parse_ai_json_object(text_value):
+    clean_text = (text_value or "").strip()
+
+    if clean_text.startswith("```"):
+        clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text)
+        clean_text = re.sub(r"\s*```$", "", clean_text)
+
+    try:
+        data = json.loads(clean_text)
+    except json.JSONDecodeError:
+        start = clean_text.find("{")
+        end = clean_text.rfind("}")
+
+        if start < 0 or end < start:
+            return None
+
+        try:
+            data = json.loads(clean_text[start:end + 1])
+        except json.JSONDecodeError:
+            return None
+
+    return data if isinstance(data, dict) else None
+
+
+def assess_textbook_answer(textbook, answer_type, answer_text, used_hint, previous_summary):
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=f"""
+あなたはStudy PASの先生です。
+ユーザーが教科書の問題に回答しました。
+単なる正誤ではなく、考え方・理解度・ズレ・次に復習すべき内容を分析してください。
+
+重要:
+- 正答率だけで判断しない。
+- 1回の回答で100%と判断しない。
+- ヒントを使った場合は、理解度を少し慎重に見る。
+- 同じミスがありそうなら指摘する。
+- item_scores には、この教科書内の重要項目を3〜6個ほど入れる。
+- 必ずJSONだけで返す。
+
+返答形式:
+{{
+  "score_percent": 72,
+  "feedback": "全体の添削コメント",
+  "understood_points": "理解できている点",
+  "weak_points": "苦手・間違えた点",
+  "unclear_points": "まだ曖昧な点",
+  "thinking_gap": "考え方がずれている点",
+  "next_review_content": "次に復習すべき内容",
+  "item_scores": [
+    {{"item_name": "return", "score_percent": 68, "reason": "戻り値の使い方がまだ曖昧"}}
+  ]
+}}
+
+回答タイプ:
+{answer_type}
+
+ヒント使用:
+{used_hint}
+
+前回までの理解度:
+{previous_summary}
+
+教科:
+{textbook.subject}
+
+教科書タイトル:
+{textbook.title}
+
+教科書内容:
+導入:
+{textbook.introduction}
+
+イメージ:
+{textbook.learning_image}
+
+基本説明:
+{textbook.beginner_explanation or textbook.basic_explanation}
+
+図・流れ:
+{textbook.visual_diagram}
+
+実際のコード・実例:
+{textbook.code_example}
+
+コード解説・流れ:
+{textbook.code_walkthrough}
+
+重要ポイント:
+{textbook.key_points}
+
+あなた専用ポイント:
+{textbook.personal_points}
+
+理解確認問題:
+{textbook.check_questions}
+
+応用問題:
+{textbook.application_questions}
+
+模範解答:
+{textbook.model_answers}
+
+詳しい解説:
+{textbook.detailed_explanations}
+
+ユーザー回答:
+{answer_text}
+"""
+        )
+
+        data = parse_ai_json_object(response.output_text)
+
+        if data is None:
+            return fallback_assessment_result(answer_text)
+
+        return data
+    except Exception:
+        return fallback_assessment_result(answer_text)
+
+
+def get_understanding_summary(db, user_id, textbook):
+    understandings = (
+        db.query(StudyUnderstanding)
+        .filter(StudyUnderstanding.user_id == user_id)
+        .filter(StudyUnderstanding.subject == textbook.subject)
+        .filter(
+            or_(
+                StudyUnderstanding.textbook_id == textbook.id,
+                StudyUnderstanding.scope_type == "subject"
+            )
+        )
+        .order_by(StudyUnderstanding.updated_at.desc())
+        .all()
+    )
+
+    if not understandings:
+        return "まだ理解度は記録されていません。"
+
+    summary = ""
+
+    for item in understandings[:8]:
+        summary += f"{item.scope_type}:{item.item_name} {item.percent or 0}% / "
+
+    return summary
+
+
+def get_or_create_understanding(db, user_id, subject, textbook_id, scope_type, item_name):
+    understanding = (
+        db.query(StudyUnderstanding)
+        .filter(StudyUnderstanding.user_id == user_id)
+        .filter(StudyUnderstanding.subject == subject)
+        .filter(StudyUnderstanding.scope_type == scope_type)
+        .filter(StudyUnderstanding.item_name == item_name)
+        .filter(StudyUnderstanding.textbook_id == textbook_id)
+        .first()
+    )
+
+    if understanding:
+        return understanding
+
+    understanding = StudyUnderstanding(
+        user_id=user_id,
+        subject=subject,
+        textbook_id=textbook_id,
+        scope_type=scope_type,
+        item_name=item_name,
+        percent=0,
+        previous_percent=0,
+        delta_percent=0
+    )
+    db.add(understanding)
+    db.flush()
+    return understanding
+
+
+def update_understanding(db, understanding, ai_score, assessment_count, evidence):
+    previous_percent = normalize_percent(understanding.percent)
+    next_percent = calculate_understanding_percent(previous_percent, ai_score, assessment_count)
+
+    understanding.previous_percent = previous_percent
+    understanding.percent = next_percent
+    understanding.delta_percent = next_percent - previous_percent
+    understanding.evidence = evidence
+    understanding.last_assessed_at = app_now()
+    understanding.updated_at = app_now()
+
+    return understanding
+
+
+def submit_textbook_answer(textbook_id, user_id, payload):
+    answer_text = (payload.answer_text or "").strip()
+
+    if not answer_text:
+        return None
+
+    answer_type = payload.answer_type if payload.answer_type in ["check", "application", "review"] else "check"
+    db = SessionLocal()
+
+    try:
+        textbook = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.id == textbook_id)
+            .filter(StudyTextbook.user_id == user_id)
+            .first()
+        )
+
+        if textbook is None:
+            return None
+
+        assessment_count = (
+            db.query(StudyAssessment)
+            .filter(StudyAssessment.user_id == user_id)
+            .filter(StudyAssessment.textbook_id == textbook.id)
+            .count()
+        )
+        previous_summary = get_understanding_summary(db, user_id, textbook)
+        result = assess_textbook_answer(
+            textbook=textbook,
+            answer_type=answer_type,
+            answer_text=answer_text,
+            used_hint=payload.used_hint,
+            previous_summary=previous_summary
+        )
+        score_percent = normalize_percent(result.get("score_percent"))
+
+        assessment = StudyAssessment(
+            user_id=user_id,
+            textbook_id=textbook.id,
+            subject=textbook.subject,
+            answer_type=answer_type,
+            answer_text=answer_text,
+            feedback=(result.get("feedback") or "").strip(),
+            score_percent=score_percent,
+            understood_points=(result.get("understood_points") or "").strip(),
+            weak_points=(result.get("weak_points") or "").strip(),
+            unclear_points=(result.get("unclear_points") or "").strip(),
+            thinking_gap=(result.get("thinking_gap") or "").strip(),
+            next_review_content=(result.get("next_review_content") or "").strip(),
+            used_hint=bool(payload.used_hint)
+        )
+        db.add(assessment)
+        db.flush()
+
+        textbook_understanding = get_or_create_understanding(
+            db,
+            user_id=user_id,
+            subject=textbook.subject,
+            textbook_id=textbook.id,
+            scope_type="textbook",
+            item_name=textbook.title
+        )
+        update_understanding(
+            db,
+            textbook_understanding,
+            score_percent,
+            assessment_count,
+            assessment.feedback
+        )
+
+        subject_understanding = get_or_create_understanding(
+            db,
+            user_id=user_id,
+            subject=textbook.subject,
+            textbook_id=None,
+            scope_type="subject",
+            item_name=textbook.subject
+        )
+        current_subject_percent = normalize_percent(subject_understanding.percent)
+        subject_score = (
+            score_percent
+            if current_subject_percent <= 0
+            else normalize_percent((current_subject_percent + score_percent) / 2)
+        )
+        update_understanding(
+            db,
+            subject_understanding,
+            subject_score,
+            assessment_count,
+            f"{textbook.title}の回答結果を反映"
+        )
+
+        item_scores = result.get("item_scores") if isinstance(result.get("item_scores"), list) else []
+
+        for item in item_scores[:8]:
+            item_name = truncate_text((item.get("item_name") or "").strip(), 120)
+            if not item_name:
+                continue
+
+            item_understanding = get_or_create_understanding(
+                db,
+                user_id=user_id,
+                subject=textbook.subject,
+                textbook_id=textbook.id,
+                scope_type="item",
+                item_name=item_name
+            )
+            update_understanding(
+                db,
+                item_understanding,
+                normalize_percent(item.get("score_percent")),
+                assessment_count,
+                (item.get("reason") or assessment.feedback or "").strip()
+            )
+
+        textbook.updated_at = app_now()
+        db.commit()
+        db.refresh(assessment)
+
+        if assessment.weak_points:
+            save_or_update_memory(
+                content=f"{textbook.subject}の苦手: {assessment.weak_points}",
+                category="weak_area",
+                importance=5,
+                confidence=0.86,
+                source_type="ai_inference",
+                status="confirmed",
+                user_id=user_id
+            )
+
+        if assessment.unclear_points:
+            save_or_update_memory(
+                content=f"{textbook.subject}でまだ曖昧な内容: {assessment.unclear_points}",
+                category="weak_area",
+                importance=4,
+                confidence=0.8,
+                source_type="ai_inference",
+                status="confirmed",
+                user_id=user_id
+            )
+
+        textbook_detail = load_textbook(textbook.id, user_id)
+
+        return {
+            "assessment": serialize_assessment(assessment),
+            "textbook": textbook_detail
+        }
     finally:
         db.close()
 
@@ -3902,6 +4483,21 @@ def api_textbook_confirm(request: Request, payload: TextbookConfirmPayload):
     return {
         "textbook": textbook
     }
+
+
+@app.post("/api/textbooks/{textbook_id}/answers")
+def api_textbook_answer(request: Request, textbook_id: int, payload: TextbookAnswerPayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    result = submit_textbook_answer(textbook_id, current_user.id, payload)
+
+    if result is None:
+        return JSONResponse({"error": "answer_submit_failed"}, status_code=400)
+
+    return result
 
 
 @app.get("/")
