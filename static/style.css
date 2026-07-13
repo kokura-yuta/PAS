@@ -783,6 +783,27 @@ body:has(.study-app) {
     margin-bottom: 4px;
 }
 
+.study-textbook-page .library-header {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr) 72px;
+    align-items: center;
+}
+
+.study-textbook-page .plain-back {
+    justify-self: start;
+}
+
+.textbook-title-block {
+    min-width: 0;
+    text-align: center;
+}
+
+.textbook-title-block h1 {
+    margin-right: auto;
+    margin-left: auto;
+    max-width: 680px;
+}
+
 .library-intro {
     display: grid;
     gap: 12px;
@@ -869,7 +890,9 @@ body:has(.study-app) {
 .understanding-panel,
 .assessment-result-card,
 .answer-submit-card,
-.assessment-history {
+.assessment-history,
+.review-plan-card,
+.roadmap-card {
     display: grid;
     gap: 16px;
     padding: 20px;
@@ -881,7 +904,9 @@ body:has(.study-app) {
 
 .understanding-panel .section-kicker,
 .assessment-result-card .section-kicker,
-.answer-submit-card .section-kicker {
+.answer-submit-card .section-kicker,
+.review-plan-card .section-kicker,
+.roadmap-card .section-kicker {
     margin: 0;
 }
 
@@ -946,6 +971,124 @@ body:has(.study-app) {
     line-height: 1.7;
 }
 
+.review-plan-card h2,
+.roadmap-card h2 {
+    margin: 0;
+    font-size: 23px;
+    line-height: 1.35;
+}
+
+.review-plan-card > p {
+    margin: 0;
+    color: var(--study-muted);
+    line-height: 1.75;
+}
+
+.review-suggestion-list,
+.roadmap-list {
+    display: grid;
+    gap: 10px;
+}
+
+.review-suggestion-list article {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 14px;
+    border: 1px solid var(--study-line);
+    border-radius: 18px;
+    background: rgba(21, 23, 25, 0.04);
+}
+
+.review-suggestion-list strong,
+.roadmap-item strong {
+    display: block;
+    margin-bottom: 5px;
+    font-size: 16px;
+}
+
+.review-suggestion-list small,
+.roadmap-item small {
+    color: var(--study-muted);
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.review-suggestion-list button,
+.roadmap-item button {
+    flex-shrink: 0;
+    min-height: 38px;
+    padding: 0 13px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-accent);
+    color: #ffffff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.roadmap-item {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: start;
+    padding: 15px;
+    border: 1px solid var(--study-line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.68);
+}
+
+.roadmap-item > span {
+    display: grid;
+    place-items: center;
+    width: 34px;
+    height: 34px;
+    border-radius: 999px;
+    background: rgba(21, 23, 25, 0.07);
+    color: var(--study-muted);
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.roadmap-item em {
+    justify-self: end;
+    padding: 6px 9px;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    color: var(--study-muted);
+    font-style: normal;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.roadmap-item button {
+    grid-column: 2 / -1;
+    justify-self: start;
+    background: rgba(21, 23, 25, 0.08);
+    color: var(--study-text);
+}
+
+.roadmap-learned em {
+    color: #356b46;
+    border-color: rgba(53, 107, 70, 0.24);
+    background: rgba(53, 107, 70, 0.08);
+}
+
+.roadmap-learning em {
+    color: #6c5425;
+    border-color: rgba(108, 84, 37, 0.24);
+    background: rgba(177, 137, 57, 0.1);
+}
+
+.roadmap-review em {
+    color: #8a4a38;
+    border-color: rgba(138, 74, 56, 0.24);
+    background: rgba(196, 96, 70, 0.1);
+}
+
 .assessment-result-card {
     border-color: rgba(21, 23, 25, 0.18);
     background: #151719;
@@ -974,7 +1117,7 @@ body:has(.study-app) {
 
 .answer-type-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     padding: 5px;
     border: 1px solid var(--study-line);
@@ -998,6 +1141,32 @@ body:has(.study-app) {
     background: #ffffff;
     color: var(--study-text);
     box-shadow: 0 10px 26px rgba(21, 23, 25, 0.08);
+}
+
+.answer-problem-preview {
+    display: grid;
+    gap: 8px;
+    padding: 15px;
+    border: 1px solid var(--study-line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.answer-problem-preview span {
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 850;
+}
+
+.answer-problem-preview pre {
+    max-height: 190px;
+    margin: 0;
+    overflow: auto;
+    color: var(--study-text);
+    font: inherit;
+    font-size: 15px;
+    line-height: 1.75;
+    white-space: pre-wrap;
 }
 
 .answer-form {
@@ -1457,7 +1626,9 @@ body:has(.study-app) {
     .understanding-panel,
     .assessment-result-card,
     .answer-submit-card,
-    .assessment-history {
+    .assessment-history,
+    .review-plan-card,
+    .roadmap-card {
         padding: 18px;
         border-radius: 22px;
     }
@@ -1485,6 +1656,28 @@ body:has(.study-app) {
 
     .answer-form textarea {
         min-height: 132px;
+    }
+
+    .review-suggestion-list article {
+        display: grid;
+    }
+
+    .review-suggestion-list button {
+        width: 100%;
+    }
+
+    .roadmap-item {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .roadmap-item em {
+        grid-column: 2;
+        justify-self: start;
+    }
+
+    .roadmap-item button {
+        grid-column: 1 / -1;
+        width: 100%;
     }
 
     .textbook-section h2,

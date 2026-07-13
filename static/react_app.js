@@ -560,6 +560,7 @@
         const subject = decodeURIComponent(route.replace(/^\/bookshelf\//, ""));
         const [data, setData] = useState(null);
         const [error, setError] = useState("");
+        const [startingLesson, setStartingLesson] = useState("");
 
         useEffect(function () {
             let active = true;
@@ -584,6 +585,38 @@
         }, [subject]);
 
         const textbooks = data ? data.textbooks : [];
+        const roadmap = data ? data.roadmap || [] : [];
+
+        async function startRoadmapLesson(item) {
+            if (startingLesson) {
+                return;
+            }
+
+            setStartingLesson(item.title);
+            setError("");
+
+            try {
+                if (data && data.chat_url) {
+                    navigate(data.chat_url, { message: `${item.title}の授業を準備しています` });
+                    return;
+                }
+
+                const response = await api("/api/chat_threads", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        title: subject,
+                        thread_type: "study"
+                    })
+                });
+
+                if (response && response.url) {
+                    navigate(response.url, { message: `${item.title}の授業を準備しています` });
+                }
+            } catch (err) {
+                setError("授業を開始できませんでした。");
+                setStartingLesson("");
+            }
+        }
 
         return h(
             "main",
@@ -613,32 +646,80 @@
             error ? h("p", { className: "notice" }, error) : null,
             !data
                 ? h("p", { className: "react-loading" }, "読み込み中")
-                : textbooks.length
-                    ? h(
-                        "section",
-                        { className: "textbook-list" },
-                        textbooks.map(function (textbook) {
-                            return h(
-                                "button",
-                                {
-                                    key: textbook.id,
-                                    type: "button",
-                                    className: "textbook-card",
-                                    onClick: function () {
-                                        navigate(textbook.url, { message: "教科書を開いています" });
-                                    }
-                                },
-                                h("span", null, textbook.subject),
-                                h("strong", null, textbook.title),
-                                h("small", null, `作成 ${textbook.created_at || "-"} / 更新 ${textbook.updated_at || "-"}`)
-                            );
-                        })
-                    )
-                    : h(
-                        "section",
-                        { className: "study-empty" },
-                        h("p", null, "この分野の教科書はまだありません。授業画面から作成できます。")
-                    )
+                : h(
+                    React.Fragment,
+                    null,
+                    roadmap.length
+                        ? h(
+                            "section",
+                            { className: "roadmap-card" },
+                            h("p", { className: "section-kicker" }, "学習ロードマップ"),
+                            h("h2", null, "次に進みやすい順番"),
+                            h(
+                                "div",
+                                { className: "roadmap-list" },
+                                roadmap.map(function (item, index) {
+                                    const statusLabels = {
+                                        learned: "理解済み",
+                                        learning: "学習中",
+                                        review: "復習",
+                                        not_started: "未学習"
+                                    };
+
+                                    return h(
+                                        "article",
+                                        { key: item.id || item.title, className: `roadmap-item roadmap-${item.status || "not_started"}` },
+                                        h("span", null, String(index + 1).padStart(2, "0")),
+                                        h(
+                                            "div",
+                                            null,
+                                            h("strong", null, item.title),
+                                            h("small", null, item.reason || "この順番で進むと理解しやすくなります。")
+                                        ),
+                                        h("em", null, statusLabels[item.status] || "未学習"),
+                                        h(
+                                            "button",
+                                            {
+                                                type: "button",
+                                                onClick: function () {
+                                                    startRoadmapLesson(item);
+                                                },
+                                                disabled: Boolean(startingLesson)
+                                            },
+                                            startingLesson === item.title ? h(LoadingLabel, { text: "準備中" }) : "この単元から始める"
+                                        )
+                                    );
+                                })
+                            )
+                        )
+                        : null,
+                    textbooks.length
+                        ? h(
+                            "section",
+                            { className: "textbook-list" },
+                            textbooks.map(function (textbook) {
+                                return h(
+                                    "button",
+                                    {
+                                        key: textbook.id,
+                                        type: "button",
+                                        className: "textbook-card",
+                                        onClick: function () {
+                                            navigate(textbook.url, { message: "教科書を開いています" });
+                                        }
+                                    },
+                                    h("span", null, textbook.subject),
+                                    h("strong", null, textbook.title),
+                                    h("small", null, `作成 ${textbook.created_at || "-"} / 更新 ${textbook.updated_at || "-"}`)
+                                );
+                            })
+                        )
+                        : h(
+                            "section",
+                            { className: "study-empty" },
+                            h("p", null, "この分野の教科書はまだありません。授業画面から作成できます。")
+                        )
+                )
         );
     }
 
@@ -691,6 +772,19 @@
             setError("");
 
             try {
+                if (answerType === "question") {
+                    await api(`/api/chat/${textbook.thread_id}/messages`, {
+                        method: "POST",
+                        body: JSON.stringify({
+                            message: `教科書「${textbook.title}」について質問です。\n\n${cleanAnswer}`
+                        })
+                    });
+
+                    setAnswerText("");
+                    navigate(`/chat/${textbook.thread_id}`, { message: "先生に質問しています" });
+                    return;
+                }
+
                 const response = await api(`/api/textbooks/${textbook.id}/answers`, {
                     method: "POST",
                     body: JSON.stringify({
@@ -713,10 +807,23 @@
                     }, 80);
                 }
             } catch (err) {
-                setError("回答を添削できませんでした。もう一度試してください。");
+                setError(answerType === "question"
+                    ? "質問を送信できませんでした。もう一度試してください。"
+                    : "回答を添削できませんでした。もう一度試してください。");
             } finally {
                 setSubmittingAnswer(false);
             }
+        }
+
+        function startReview(suggestion) {
+            setAnswerType("review");
+            setAnswerText(`復習する内容: ${suggestion.item_name}\n\n自分の回答:\n`);
+            window.setTimeout(function () {
+                const form = document.querySelector(".answer-submit-card");
+                if (form) {
+                    form.scrollIntoView({ behavior: "smooth", block: "center" });
+                }
+            }, 80);
         }
 
         const textbook = data ? data.textbook : null;
@@ -734,6 +841,56 @@
             return item.scope_type === "item";
         });
         const assessments = textbook ? textbook.assessments || [] : [];
+        const reviewSuggestions = textbook ? textbook.review_suggestions || [] : [];
+        const currentProblemText = getCurrentProblemText();
+        const answerCardKicker = answerType === "question" ? "先生に質問する" : "問題に回答する";
+        const answerCardTitle = answerType === "question"
+            ? "教科書を見ながら分からないところを聞く"
+            : "解いた答えを先生に添削してもらう";
+        const answerPlaceholder = answerType === "question"
+            ? "分からないところをそのまま質問してください。例: 2番の問題で、なぜこの式になるのか分かりません。"
+            : "ここに自分の回答を書いてください。途中式や考え方も書くと、先生がより正確に添削できます。";
+        const submitLabel = answerType === "question" ? "先生に質問する" : "回答を提出する";
+        const loadingLabel = answerType === "question" ? "質問中" : "添削中";
+        const showHintCheck = answerType !== "question";
+
+        function findSectionContent(sectionKey) {
+            if (!textbook || !textbook.sections) {
+                return "";
+            }
+
+            const section = textbook.sections.find(function (item) {
+                return item.key === sectionKey;
+            });
+
+            return section && section.content ? section.content.trim() : "";
+        }
+
+        function getCurrentProblemText() {
+            if (!textbook) {
+                return "";
+            }
+
+            if (answerType === "check") {
+                return findSectionContent("check_questions") || "理解確認問題がまだありません。教科書本文を読んで、自分の言葉で要点を書いてみてください。";
+            }
+
+            if (answerType === "application") {
+                return findSectionContent("application_questions") || "応用問題がまだありません。学んだ内容を別の例で使うならどうなるかを書いてみてください。";
+            }
+
+            if (answerType === "review") {
+                if (reviewSuggestions.length) {
+                    return reviewSuggestions.map(function (suggestion, index) {
+                        return `${index + 1}. ${suggestion.item_name}\n${suggestion.review_message}`;
+                    }).join("\n\n");
+                }
+
+                return findSectionContent("key_points") || findSectionContent("personal_points") || "次に復習したい内容を選んで、自分の言葉で説明してみてください。";
+            }
+
+            return `教科書「${textbook.title}」を見ながら、分からないところを先生に質問できます。問題番号、本文の場所、つまずいた理由を書けると、先生が答えやすくなります。`;
+        }
 
         return h(
             "main",
@@ -758,7 +915,7 @@
                 ),
                 h(
                     "div",
-                    null,
+                    { className: "textbook-title-block" },
                     h("p", { className: "eyebrow" }, textbook ? textbook.subject : "Textbook"),
                     h("h1", null, textbook ? textbook.title : "教科書")
                 ),
@@ -816,6 +973,46 @@
                             : h("p", { className: "understanding-empty" }, "問題に回答すると、項目ごとの理解度が表示されます。")
                     ),
                     h(
+                        "section",
+                        { className: "review-plan-card" },
+                        h("p", { className: "section-kicker" }, "復習提案"),
+                        h("h2", null, reviewSuggestions.length ? "今やると定着しやすい復習" : "次の復習を待っています"),
+                        reviewSuggestions.length
+                            ? h(
+                                "div",
+                                { className: "review-suggestion-list" },
+                                reviewSuggestions.map(function (suggestion) {
+                                    return h(
+                                        "article",
+                                        { key: `${suggestion.scope_type}-${suggestion.id}` },
+                                        h(
+                                            "div",
+                                            null,
+                                            h("strong", null, suggestion.item_name),
+                                            h("small", null, `${suggestion.percent}% / ${suggestion.review_message}`)
+                                        ),
+                                        h(
+                                            "button",
+                                            {
+                                                type: "button",
+                                                onClick: function () {
+                                                    startReview(suggestion);
+                                                }
+                                            },
+                                            "復習する"
+                                        )
+                                    );
+                                })
+                            )
+                            : h(
+                                "p",
+                                null,
+                                textbookUnderstanding && textbookUnderstanding.next_review_at
+                                    ? `次回の復習予定は ${textbookUnderstanding.next_review_at} です。`
+                                    : "回答を提出すると、先生が次の復習タイミングを決めます。"
+                            )
+                    ),
+                    h(
                         "article",
                         { className: "textbook-reader" },
                         sections.map(function (section) {
@@ -856,15 +1053,16 @@
                     h(
                         "section",
                         { className: "answer-submit-card" },
-                        h("p", { className: "section-kicker" }, "問題に回答する"),
-                        h("h2", null, "解いた答えを先生に添削してもらう"),
+                        h("p", { className: "section-kicker" }, answerCardKicker),
+                        h("h2", null, answerCardTitle),
                         h(
                             "div",
                             { className: "answer-type-tabs", role: "tablist" },
                             [
                                 { key: "check", label: "理解確認" },
                                 { key: "application", label: "応用問題" },
-                                { key: "review", label: "復習" }
+                                { key: "review", label: "復習" },
+                                { key: "question", label: "質問" }
                             ].map(function (item) {
                                 return h(
                                     "button",
@@ -881,17 +1079,23 @@
                             })
                         ),
                         h(
+                            "div",
+                            { className: "answer-problem-preview" },
+                            h("span", null, answerType === "question" ? "質問する内容" : "見ながら解く問題"),
+                            h("pre", null, currentProblemText)
+                        ),
+                        h(
                             "form",
                             { className: "answer-form", onSubmit: submitTextbookAnswer },
                             h("textarea", {
                                 value: answerText,
-                                placeholder: "ここに自分の回答を書いてください。途中式や考え方も書くと、先生がより正確に添削できます。",
+                                placeholder: answerPlaceholder,
                                 onChange: function (event) {
                                     setAnswerText(event.target.value);
                                 },
                                 disabled: submittingAnswer
                             }),
-                            h(
+                            showHintCheck ? h(
                                 "label",
                                 { className: "hint-check" },
                                 h("input", {
@@ -903,14 +1107,14 @@
                                     disabled: submittingAnswer
                                 }),
                                 "ヒントを使った"
-                            ),
+                            ) : null,
                             h(
                                 "button",
                                 {
                                     type: "submit",
                                     disabled: submittingAnswer || !answerText.trim()
                                 },
-                                submittingAnswer ? h(LoadingLabel, { text: "添削中" }) : "回答を提出する"
+                                submittingAnswer ? h(LoadingLabel, { text: loadingLabel }) : submitLabel
                             )
                         )
                     ),
@@ -943,18 +1147,7 @@
                                 );
                             })
                         )
-                        : null,
-                    h(
-                        "button",
-                        {
-                            type: "button",
-                            className: "ask-teacher-button",
-                            onClick: function () {
-                                navigate(`/chat/${textbook.thread_id}`, { message: "先生の授業へ戻っています" });
-                            }
-                        },
-                        "この内容を先生に質問する"
-                    )
+                        : null
                 )
         );
     }

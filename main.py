@@ -446,6 +446,10 @@ class StudyUnderstanding(Base):
     delta_percent = Column(Integer, default=0)
     evidence = Column(Text)
     last_assessed_at = Column(DateTime)
+    next_review_at = Column(DateTime)
+    review_interval_days = Column(Integer, default=1)
+    review_count = Column(Integer, default=0)
+    retention_level = Column(String(50), default="new")
     created_at = Column(DateTime, default=app_now)
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
@@ -466,8 +470,25 @@ class StudyAssessment(Base):
     unclear_points = Column(Text)
     thinking_gap = Column(Text)
     next_review_content = Column(Text)
+    next_review_at = Column(DateTime)
+    review_interval_days = Column(Integer, default=1)
     used_hint = Column(Boolean, default=False)
     created_at = Column(DateTime, default=app_now)
+
+
+class StudyRoadmapItem(Base):
+    __tablename__ = "study_roadmap_items"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    title = Column(String(255))
+    status = Column(String(50), default="not_started")
+    reason = Column(Text)
+    sort_order = Column(Integer, default=0)
+    source_type = Column(String(50), default="ai")
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
 Base.metadata.create_all(bind=engine)
@@ -532,7 +553,8 @@ def ensure_user_id_columns():
         "study_textbooks",
         "study_textbook_updates",
         "study_understandings",
-        "study_assessments"
+        "study_assessments",
+        "study_roadmap_items"
     ]
 
     for table_name in user_tables:
@@ -557,6 +579,27 @@ def ensure_study_textbook_chapter_columns():
 
 
 ensure_study_textbook_chapter_columns()
+
+def ensure_study_learning_columns():
+    ensure_columns(
+        "study_understandings",
+        {
+            "next_review_at": "TIMESTAMP",
+            "review_interval_days": "INTEGER DEFAULT 1",
+            "review_count": "INTEGER DEFAULT 0",
+            "retention_level": "VARCHAR(50) DEFAULT 'new'"
+        }
+    )
+    ensure_columns(
+        "study_assessments",
+        {
+            "next_review_at": "TIMESTAMP",
+            "review_interval_days": "INTEGER DEFAULT 1"
+        }
+    )
+
+
+ensure_study_learning_columns()
 
 def normalize_email(email):
     return (email or "").strip().lower()
@@ -673,7 +716,8 @@ def claim_unowned_data(user_id):
         "study_textbooks",
         "study_textbook_updates",
         "study_understandings",
-        "study_assessments"
+        "study_assessments",
+        "study_roadmap_items"
     ]
 
     with engine.begin() as connection:
@@ -1266,6 +1310,9 @@ def serialize_textbook_update(update):
 
 
 def serialize_understanding(understanding):
+    next_review_at = understanding.next_review_at
+    review_due = bool(next_review_at and next_review_at.date() <= app_now().date())
+
     return {
         "id": understanding.id,
         "subject": understanding.subject,
@@ -1275,7 +1322,12 @@ def serialize_understanding(understanding):
         "previous_percent": understanding.previous_percent or 0,
         "delta_percent": understanding.delta_percent or 0,
         "evidence": understanding.evidence or "",
-        "last_assessed_at": format_datetime(understanding.last_assessed_at)
+        "last_assessed_at": format_datetime(understanding.last_assessed_at),
+        "next_review_at": format_date(next_review_at),
+        "review_interval_days": understanding.review_interval_days or 1,
+        "review_count": understanding.review_count or 0,
+        "retention_level": understanding.retention_level or "new",
+        "review_due": review_due
     }
 
 
@@ -1291,9 +1343,50 @@ def serialize_assessment(assessment):
         "unclear_points": assessment.unclear_points or "",
         "thinking_gap": assessment.thinking_gap or "",
         "next_review_content": assessment.next_review_content or "",
+        "next_review_at": format_date(assessment.next_review_at),
+        "review_interval_days": assessment.review_interval_days or 1,
         "used_hint": bool(assessment.used_hint),
         "created_at": format_datetime(assessment.created_at)
     }
+
+
+def serialize_roadmap_item(item):
+    return {
+        "id": item.id,
+        "subject": item.subject,
+        "title": item.title or "",
+        "status": item.status or "not_started",
+        "reason": item.reason or "",
+        "sort_order": item.sort_order or 0
+    }
+
+
+def build_review_suggestions(understandings, limit=4):
+    today = app_now().date()
+    suggestions = []
+
+    for item in understandings or []:
+        if item.scope_type not in ["textbook", "item"]:
+            continue
+
+        if not item.next_review_at:
+            continue
+
+        days_until = (item.next_review_at.date() - today).days
+
+        if days_until > 3:
+            continue
+
+        suggestions.append({
+            **serialize_understanding(item),
+            "days_until_review": days_until,
+            "review_message": "今日復習するとよさそうです。" if days_until <= 0 else f"{days_until}日後に復習予定です。"
+        })
+
+    return sorted(
+        suggestions,
+        key=lambda item: (item["days_until_review"], item["percent"])
+    )[:limit]
 
 
 def serialize_textbook_detail(textbook, updates=None, understandings=None, assessments=None):
@@ -1321,7 +1414,8 @@ def serialize_textbook_detail(textbook, updates=None, understandings=None, asses
         "assessments": [
             serialize_assessment(assessment)
             for assessment in (assessments or [])
-        ]
+        ],
+        "review_suggestions": build_review_suggestions(understandings or [])
     }
 
 
@@ -1435,11 +1529,199 @@ def load_bookshelves(user_id):
         db.close()
 
 
+ROADMAP_TEMPLATES = {
+    "Python": ["基本文法", "変数", "条件分岐", "繰り返し", "関数", "引数", "return", "リスト", "辞書", "クラス", "ファイル操作", "Webアプリ基礎"],
+    "英語": ["be動詞", "一般動詞", "三人称単数", "現在進行形", "過去形", "未来表現", "助動詞", "比較", "不定詞", "現在完了"],
+    "数学": ["計算の基礎", "方程式", "関数", "一次関数", "二次関数", "図形", "確率", "証明"],
+    "基本情報": ["コンピュータ基礎", "アルゴリズム", "データ構造", "ネットワーク", "データベース", "セキュリティ", "マネジメント", "ストラテジ"],
+    "TOEIC": ["品詞", "時制", "文型", "接続詞", "リスニング基礎", "Part 5", "Part 6", "Part 7"]
+}
+
+
+def normalize_roadmap_status(status):
+    return status if status in ["learned", "learning", "review", "not_started"] else "not_started"
+
+
+def infer_roadmap_status(title, textbooks, understandings):
+    title_text = (title or "").lower()
+    related_understandings = [
+        item
+        for item in understandings
+        if title_text and title_text in ((item.item_name or "").lower())
+    ]
+
+    if related_understandings:
+        best = max([normalize_percent(item.percent) for item in related_understandings])
+        has_due_review = any(item.next_review_at and item.next_review_at.date() <= app_now().date() for item in related_understandings)
+
+        if has_due_review and best < 95:
+            return "review"
+        if best >= 85:
+            return "learned"
+        if best >= 35:
+            return "learning"
+
+    for textbook in textbooks:
+        combined = f"{textbook.title or ''} {textbook.key_points or ''} {textbook.personal_points or ''}".lower()
+        if title_text and title_text in combined:
+            return "learning"
+
+    return "not_started"
+
+
+def fallback_roadmap_items(subject, textbooks, understandings):
+    titles = ROADMAP_TEMPLATES.get(subject)
+
+    if not titles:
+        titles = []
+
+    for textbook in textbooks:
+        title = truncate_text(textbook.title or "", 40)
+        if title and title not in titles:
+            titles.append(title)
+
+    if not titles:
+        titles = ["基礎の確認", "重要語句の理解", "例題で確認", "自分で説明する", "応用問題"]
+
+    return [
+        {
+            "title": title,
+            "status": infer_roadmap_status(title, textbooks, understandings),
+            "reason": "今の理解度と作成済み教科書から、次に進みやすい順番として並べています。"
+        }
+        for title in titles[:10]
+    ]
+
+
+def generate_roadmap_items_with_ai(subject, textbooks, understandings):
+    textbook_titles = [textbook.title for textbook in textbooks if textbook.title]
+    understanding_summary = [
+        {
+            "item": item.item_name,
+            "percent": item.percent,
+            "scope": item.scope_type
+        }
+        for item in understandings[:20]
+    ]
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=f"""
+あなたはStudy PASの学習設計をする先生です。
+科目ごとに、ユーザーが理解しやすい学習ロードマップを作ってください。
+
+ルール:
+- 6〜10個の単元にする。
+- 順番はおすすめだが、強制しない。
+- status は learned / learning / review / not_started のどれか。
+- 既に教科書や理解度がある内容は反映する。
+- 前提知識を飛ばしそうな場合は reason でやさしく説明する。
+- 必ずJSONだけで返す。
+
+返答形式:
+{{
+  "items": [
+    {{"title": "関数", "status": "learning", "reason": "今のPython学習の中心になっているため"}},
+    {{"title": "return", "status": "review", "reason": "以前少し曖昧だったため"}}
+  ]
+}}
+
+科目:
+{subject}
+
+作成済み教科書:
+{json.dumps(textbook_titles, ensure_ascii=False)}
+
+理解度:
+{json.dumps(understanding_summary, ensure_ascii=False)}
+"""
+        )
+        data = parse_ai_json_object(response.output_text)
+        items = data.get("items") if isinstance(data, dict) else None
+
+        if not isinstance(items, list):
+            return None
+
+        normalized = []
+        for item in items[:10]:
+            title = truncate_text((item.get("title") or "").strip(), 80)
+            if not title:
+                continue
+
+            normalized.append({
+                "title": title,
+                "status": normalize_roadmap_status(item.get("status")),
+                "reason": truncate_text((item.get("reason") or "").strip(), 240)
+            })
+
+        return normalized or None
+    except Exception:
+        return None
+
+
+def load_or_create_roadmap(db, user_id, subject, textbooks, understandings):
+    existing_items = (
+        db.query(StudyRoadmapItem)
+        .filter(StudyRoadmapItem.user_id == user_id)
+        .filter(StudyRoadmapItem.subject == subject)
+        .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+        .all()
+    )
+
+    if not existing_items:
+        roadmap_items = generate_roadmap_items_with_ai(subject, textbooks, understandings)
+        source_type = "ai"
+
+        if not roadmap_items:
+            roadmap_items = fallback_roadmap_items(subject, textbooks, understandings)
+            source_type = "fallback"
+
+        for index, item in enumerate(roadmap_items):
+            db.add(StudyRoadmapItem(
+                user_id=user_id,
+                subject=subject,
+                title=item["title"],
+                status=item["status"],
+                reason=item["reason"],
+                sort_order=index,
+                source_type=source_type
+            ))
+
+        db.commit()
+        existing_items = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == user_id)
+            .filter(StudyRoadmapItem.subject == subject)
+            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+            .all()
+        )
+
+    for item in existing_items:
+        inferred_status = infer_roadmap_status(item.title, textbooks, understandings)
+        if inferred_status != "not_started" and item.status != inferred_status:
+            item.status = inferred_status
+            item.updated_at = app_now()
+
+    db.commit()
+
+    return [serialize_roadmap_item(item) for item in existing_items]
+
+
 def load_bookshelf(subject, user_id):
     clean_subject = normalize_subject_title(subject) or "学習相談"
     db = SessionLocal()
 
     try:
+        study_thread = (
+            db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
+            .filter(ChatThread.thread_type == STUDY_THREAD_TYPE)
+            .filter(ChatThread.title == clean_subject)
+            .order_by(ChatThread.updated_at.desc().nullslast(), ChatThread.created_at.desc())
+            .first()
+        )
+
         textbooks = (
             db.query(StudyTextbook)
             .filter(StudyTextbook.user_id == user_id)
@@ -1448,8 +1730,18 @@ def load_bookshelf(subject, user_id):
             .all()
         )
 
+        understandings = (
+            db.query(StudyUnderstanding)
+            .filter(StudyUnderstanding.user_id == user_id)
+            .filter(StudyUnderstanding.subject == clean_subject)
+            .order_by(StudyUnderstanding.updated_at.desc())
+            .all()
+        )
+
         return {
             "subject": clean_subject,
+            "chat_url": f"/chat/{study_thread.id}" if study_thread else "",
+            "roadmap": load_or_create_roadmap(db, user_id, clean_subject, textbooks, understandings),
             "textbooks": [
                 serialize_textbook_summary(textbook)
                 for textbook in textbooks
@@ -1800,6 +2092,46 @@ def calculate_understanding_percent(previous_percent, ai_score, assessment_count
     return normalize_percent(previous_percent * 0.72 + capped_score * 0.28)
 
 
+def calculate_next_review_plan(percent, previous_interval_days, review_count, answer_type, used_hint, weak_points, unclear_points):
+    percent = normalize_percent(percent)
+    previous_interval_days = max(1, int(previous_interval_days or 1))
+    review_count = int(review_count or 0)
+    has_weak_signal = bool((weak_points or "").strip() or (unclear_points or "").strip() or used_hint)
+
+    if percent < 50:
+        interval_days = 1
+    elif percent < 70:
+        interval_days = 2
+    elif percent < 85:
+        interval_days = 4
+    elif percent < 95:
+        interval_days = max(7, previous_interval_days + 2)
+    else:
+        if answer_type == "review":
+            interval_days = max(14, previous_interval_days * 2)
+        else:
+            interval_days = max(10, previous_interval_days)
+
+    if has_weak_signal:
+        interval_days = max(1, int(round(interval_days * 0.65)))
+
+    if percent >= 100 and review_count >= 3:
+        retention_level = "mastered"
+        interval_days = max(interval_days, 90)
+    elif percent >= 90 and review_count >= 2:
+        retention_level = "stable"
+    elif percent >= 60:
+        retention_level = "reviewing"
+    else:
+        retention_level = "new"
+
+    return {
+        "interval_days": min(interval_days, 365),
+        "next_review_at": app_now() + timedelta(days=min(interval_days, 365)),
+        "retention_level": retention_level
+    }
+
+
 def fallback_assessment_result(answer_text):
     return {
         "score_percent": 45,
@@ -1990,7 +2322,7 @@ def get_or_create_understanding(db, user_id, subject, textbook_id, scope_type, i
     return understanding
 
 
-def update_understanding(db, understanding, ai_score, assessment_count, evidence):
+def update_understanding(db, understanding, ai_score, assessment_count, evidence, review_context=None):
     previous_percent = normalize_percent(understanding.percent)
     next_percent = calculate_understanding_percent(previous_percent, ai_score, assessment_count)
 
@@ -2000,6 +2332,23 @@ def update_understanding(db, understanding, ai_score, assessment_count, evidence
     understanding.evidence = evidence
     understanding.last_assessed_at = app_now()
     understanding.updated_at = app_now()
+
+    if review_context:
+        if review_context.get("answer_type") == "review":
+            understanding.review_count = (understanding.review_count or 0) + 1
+
+        review_plan = calculate_next_review_plan(
+            percent=next_percent,
+            previous_interval_days=understanding.review_interval_days or 1,
+            review_count=understanding.review_count or 0,
+            answer_type=review_context.get("answer_type"),
+            used_hint=review_context.get("used_hint"),
+            weak_points=review_context.get("weak_points"),
+            unclear_points=review_context.get("unclear_points")
+        )
+        understanding.next_review_at = review_plan["next_review_at"]
+        understanding.review_interval_days = review_plan["interval_days"]
+        understanding.retention_level = review_plan["retention_level"]
 
     return understanding
 
@@ -2058,6 +2407,13 @@ def submit_textbook_answer(textbook_id, user_id, payload):
         db.add(assessment)
         db.flush()
 
+        review_context = {
+            "answer_type": answer_type,
+            "used_hint": bool(payload.used_hint),
+            "weak_points": assessment.weak_points,
+            "unclear_points": assessment.unclear_points
+        }
+
         textbook_understanding = get_or_create_understanding(
             db,
             user_id=user_id,
@@ -2071,8 +2427,11 @@ def submit_textbook_answer(textbook_id, user_id, payload):
             textbook_understanding,
             score_percent,
             assessment_count,
-            assessment.feedback
+            assessment.feedback,
+            review_context
         )
+        assessment.next_review_at = textbook_understanding.next_review_at
+        assessment.review_interval_days = textbook_understanding.review_interval_days
 
         subject_understanding = get_or_create_understanding(
             db,
@@ -2093,7 +2452,8 @@ def submit_textbook_answer(textbook_id, user_id, payload):
             subject_understanding,
             subject_score,
             assessment_count,
-            f"{textbook.title}の回答結果を反映"
+            f"{textbook.title}の回答結果を反映",
+            review_context
         )
 
         item_scores = result.get("item_scores") if isinstance(result.get("item_scores"), list) else []
@@ -2116,7 +2476,8 @@ def submit_textbook_answer(textbook_id, user_id, payload):
                 item_understanding,
                 normalize_percent(item.get("score_percent")),
                 assessment_count,
-                (item.get("reason") or assessment.feedback or "").strip()
+                (item.get("reason") or assessment.feedback or "").strip(),
+                review_context
             )
 
         textbook.updated_at = app_now()
