@@ -763,6 +763,254 @@ body:has(.study-app) {
     display: none;
 }
 
+.study-library,
+.study-textbook-page {
+    display: grid;
+    gap: 28px;
+}
+
+.library-header {
+    margin-bottom: 4px;
+}
+
+.library-intro {
+    display: grid;
+    gap: 12px;
+    padding: 22px;
+    border: 1px solid var(--study-line);
+    border-radius: 24px;
+    background: var(--study-surface-strong);
+    box-shadow: 0 18px 54px rgba(21, 23, 25, 0.08);
+}
+
+.library-intro h2 {
+    margin: 0;
+    font-size: 30px;
+    line-height: 1.25;
+}
+
+.library-intro p:last-child {
+    margin: 0;
+    color: var(--study-muted);
+    line-height: 1.7;
+}
+
+.bookshelf-grid,
+.textbook-list {
+    display: grid;
+    gap: 12px;
+}
+
+.bookshelf-card,
+.textbook-card {
+    display: grid;
+    gap: 8px;
+    width: 100%;
+    padding: 20px;
+    border: 1px solid var(--study-line);
+    border-radius: 22px;
+    background: var(--study-surface-strong);
+    color: var(--study-text);
+    box-shadow: 0 14px 42px rgba(21, 23, 25, 0.07);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+}
+
+.bookshelf-card:hover,
+.bookshelf-card:focus-visible,
+.textbook-card:hover,
+.textbook-card:focus-visible {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(21, 23, 25, 0.2);
+}
+
+.bookshelf-card span,
+.textbook-card span,
+.textbook-card small,
+.bookshelf-card small {
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.bookshelf-card strong,
+.textbook-card strong {
+    font-size: 22px;
+    line-height: 1.35;
+}
+
+.textbook-meta-card {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.textbook-meta-card span {
+    padding: 7px 11px;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.7);
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.textbook-reader {
+    display: grid;
+    gap: 18px;
+    padding: 22px;
+    border: 1px solid var(--study-line);
+    border-radius: 26px;
+    background: rgba(255, 255, 255, 0.88);
+    box-shadow: 0 22px 60px rgba(21, 23, 25, 0.1);
+}
+
+.textbook-section {
+    padding-bottom: 18px;
+    border-bottom: 1px solid var(--study-line);
+}
+
+.textbook-section:last-child {
+    padding-bottom: 0;
+    border-bottom: 0;
+}
+
+.textbook-section h2,
+.textbook-updates h2 {
+    margin: 0 0 10px;
+    font-size: 20px;
+    line-height: 1.35;
+}
+
+.textbook-section p,
+.textbook-updates p {
+    margin: 0;
+    color: var(--study-text);
+    line-height: 1.9;
+    white-space: pre-wrap;
+}
+
+.textbook-updates {
+    display: grid;
+    gap: 10px;
+    padding: 20px;
+    border: 1px solid var(--study-line);
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.68);
+}
+
+.ask-teacher-button {
+    min-height: 50px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-accent);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.textbook-preview-card {
+    display: grid;
+    gap: 16px;
+    margin-top: 22px;
+    padding: 20px;
+    border: 1px solid var(--study-line);
+    border-radius: 24px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 22px 58px rgba(21, 23, 25, 0.12);
+    animation: studyFadeUp 220ms ease-out both;
+}
+
+.textbook-preview-head {
+    display: grid;
+    gap: 8px;
+}
+
+.textbook-preview-head h2 {
+    margin: 0;
+    font-size: 24px;
+    line-height: 1.35;
+}
+
+.textbook-preview-head small {
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.textbook-preview-body {
+    display: grid;
+    gap: 8px;
+    padding: 14px;
+    border-radius: 18px;
+    background: rgba(21, 23, 25, 0.045);
+}
+
+.textbook-preview-body strong {
+    font-size: 14px;
+}
+
+.textbook-preview-body p,
+.textbook-preview-details p {
+    margin: 0;
+    line-height: 1.75;
+    white-space: pre-wrap;
+}
+
+.textbook-preview-details {
+    border-top: 1px solid var(--study-line);
+    padding-top: 10px;
+}
+
+.textbook-preview-details summary {
+    color: var(--study-text);
+    cursor: pointer;
+    font-weight: 850;
+}
+
+.textbook-preview-details div {
+    display: grid;
+    gap: 6px;
+    margin-top: 14px;
+}
+
+.textbook-preview-details h3 {
+    margin: 0;
+    color: var(--study-muted);
+    font-size: 14px;
+}
+
+.textbook-preview-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.textbook-preview-actions button {
+    min-height: 46px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-accent);
+    color: #ffffff;
+    font: inherit;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.textbook-preview-actions .secondary-button {
+    border: 1px solid var(--study-line);
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--study-text);
+}
+
+.lesson-actions .textbook-action {
+    background: #151719;
+    color: #ffffff;
+}
+
 @keyframes studySpin {
     to {
         transform: rotate(360deg);
@@ -925,6 +1173,54 @@ body:has(.study-app) {
     .study-chat-form button {
         min-width: 72px;
         padding: 0 12px;
+    }
+
+    .library-intro {
+        padding: 18px;
+        border-radius: 22px;
+    }
+
+    .library-intro h2 {
+        font-size: 25px;
+    }
+
+    .bookshelf-card,
+    .textbook-card {
+        padding: 18px;
+        border-radius: 20px;
+    }
+
+    .bookshelf-card strong,
+    .textbook-card strong {
+        font-size: 20px;
+    }
+
+    .textbook-reader {
+        padding: 18px;
+        border-radius: 22px;
+    }
+
+    .textbook-section h2,
+    .textbook-updates h2 {
+        font-size: 18px;
+    }
+
+    .textbook-preview-card {
+        padding: 18px;
+        border-radius: 22px;
+    }
+
+    .textbook-preview-head h2 {
+        font-size: 21px;
+    }
+
+    .textbook-preview-actions {
+        display: grid;
+    }
+
+    .textbook-preview-actions button,
+    .ask-teacher-button {
+        width: 100%;
     }
 }
 .theme-calm {

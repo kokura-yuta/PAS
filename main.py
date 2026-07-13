@@ -118,6 +118,30 @@ class ChatMessageCreatePayload(BaseModel):
     message: str = ""
 
 
+class TextbookPreviewPayload(BaseModel):
+    source_note: str = ""
+
+
+class TextbookConfirmPayload(BaseModel):
+    thread_id: int
+    mode: str = "create"
+    target_textbook_id: int | None = None
+    title: str = ""
+    bookshelf_subject: str = ""
+    basic_explanation: str = ""
+    concrete_examples: str = ""
+    key_points: str = ""
+    weak_points: str = ""
+    unclear_points: str = ""
+    common_mistakes: str = ""
+    check_questions: str = ""
+    application_questions: str = ""
+    model_answers: str = ""
+    detailed_explanations: str = ""
+    related_textbooks: str = ""
+    update_summary: str = ""
+
+
 def get_app_timezone():
     try:
         return ZoneInfo(APP_TIMEZONE)
@@ -354,6 +378,40 @@ class CalendarEvent(Base):
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
+class StudyTextbook(Base):
+    __tablename__ = "study_textbooks"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    thread_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    title = Column(String(255))
+    basic_explanation = Column(Text)
+    concrete_examples = Column(Text)
+    key_points = Column(Text)
+    weak_points = Column(Text)
+    unclear_points = Column(Text)
+    common_mistakes = Column(Text)
+    check_questions = Column(Text)
+    application_questions = Column(Text)
+    model_answers = Column(Text)
+    detailed_explanations = Column(Text)
+    related_textbooks = Column(Text)
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
+
+
+class StudyTextbookUpdate(Base):
+    __tablename__ = "study_textbook_updates"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    textbook_id = Column(Integer, index=True)
+    action_type = Column(String(50), default="created")
+    summary = Column(Text)
+    created_at = Column(DateTime, default=app_now)
+
+
 Base.metadata.create_all(bind=engine)
 
 def ensure_columns(table_name, column_definitions):
@@ -412,7 +470,9 @@ def ensure_user_id_columns():
         "goals",
         "settings",
         "timeline_memories",
-        "calendar_events"
+        "calendar_events",
+        "study_textbooks",
+        "study_textbook_updates"
     ]
 
     for table_name in user_tables:
@@ -532,7 +592,9 @@ def claim_unowned_data(user_id):
         "goals",
         "settings",
         "timeline_memories",
-        "calendar_events"
+        "calendar_events",
+        "study_textbooks",
+        "study_textbook_updates"
     ]
 
     with engine.begin() as connection:
@@ -1056,6 +1118,458 @@ def load_study_memory_highlights(user_id, limit=4):
             }
             for memory in memories
         ]
+    finally:
+        db.close()
+
+
+TEXTBOOK_CONTENT_FIELDS = [
+    "basic_explanation",
+    "concrete_examples",
+    "key_points",
+    "weak_points",
+    "unclear_points",
+    "common_mistakes",
+    "check_questions",
+    "application_questions",
+    "model_answers",
+    "detailed_explanations",
+    "related_textbooks"
+]
+
+
+TEXTBOOK_FIELD_LABELS = {
+    "basic_explanation": "基本説明",
+    "concrete_examples": "具体例",
+    "key_points": "重要ポイント",
+    "weak_points": "本人が苦手だったポイント",
+    "unclear_points": "まだ曖昧な内容",
+    "common_mistakes": "本人が間違えやすいポイント",
+    "check_questions": "理解確認問題5問",
+    "application_questions": "応用問題10問",
+    "model_answers": "模範解答",
+    "detailed_explanations": "詳しい解説",
+    "related_textbooks": "関連する教科書"
+}
+
+
+def serialize_textbook_summary(textbook):
+    return {
+        "id": textbook.id,
+        "title": textbook.title,
+        "subject": textbook.subject,
+        "created_at": format_date(textbook.created_at),
+        "updated_at": format_date(textbook.updated_at),
+        "url": f"/textbook/{textbook.id}"
+    }
+
+
+def serialize_textbook_update(update):
+    return {
+        "id": update.id,
+        "action_type": update.action_type,
+        "summary": update.summary,
+        "created_at": format_date(update.created_at)
+    }
+
+
+def serialize_textbook_detail(textbook, updates=None):
+    sections = [
+        {
+            "key": field_name,
+            "label": TEXTBOOK_FIELD_LABELS[field_name],
+            "content": getattr(textbook, field_name) or ""
+        }
+        for field_name in TEXTBOOK_CONTENT_FIELDS
+    ]
+
+    return {
+        **serialize_textbook_summary(textbook),
+        "thread_id": textbook.thread_id,
+        "sections": sections,
+        "updates": [
+            serialize_textbook_update(update)
+            for update in (updates or [])
+        ]
+    }
+
+
+def load_textbook(textbook_id, user_id):
+    db = SessionLocal()
+
+    try:
+        textbook = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.id == textbook_id)
+            .filter(StudyTextbook.user_id == user_id)
+            .first()
+        )
+
+        if textbook is None:
+            return None
+
+        updates = (
+            db.query(StudyTextbookUpdate)
+            .filter(StudyTextbookUpdate.user_id == user_id)
+            .filter(StudyTextbookUpdate.textbook_id == textbook.id)
+            .order_by(StudyTextbookUpdate.created_at.desc())
+            .all()
+        )
+
+        return serialize_textbook_detail(textbook, updates)
+    finally:
+        db.close()
+
+
+def load_bookshelves(user_id):
+    db = SessionLocal()
+
+    try:
+        subjects = {}
+
+        study_threads = (
+            db.query(ChatThread)
+            .filter(ChatThread.user_id == user_id)
+            .filter(ChatThread.thread_type == STUDY_THREAD_TYPE)
+            .all()
+        )
+
+        for thread in study_threads:
+            subject = thread.title or "学習相談"
+            subjects[subject] = {
+                "subject": subject,
+                "textbook_count": 0,
+                "latest_updated_at": thread.updated_at or thread.created_at,
+                "url": f"/bookshelf/{quote(subject)}"
+            }
+
+        textbooks = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.user_id == user_id)
+            .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+            .all()
+        )
+
+        for textbook in textbooks:
+            subject = textbook.subject or "学習相談"
+            if subject not in subjects:
+                subjects[subject] = {
+                    "subject": subject,
+                    "textbook_count": 0,
+                    "latest_updated_at": textbook.updated_at or textbook.created_at,
+                    "url": f"/bookshelf/{quote(subject)}"
+                }
+
+            subjects[subject]["textbook_count"] += 1
+            latest = subjects[subject]["latest_updated_at"]
+            textbook_updated = textbook.updated_at or textbook.created_at
+            if latest is None or (textbook_updated and textbook_updated > latest):
+                subjects[subject]["latest_updated_at"] = textbook_updated
+
+        shelves = []
+
+        for shelf in subjects.values():
+            shelves.append({
+                "subject": shelf["subject"],
+                "textbook_count": shelf["textbook_count"],
+                "latest_updated_at": format_date(shelf["latest_updated_at"]),
+                "url": shelf["url"]
+            })
+
+        return sorted(shelves, key=lambda item: item["latest_updated_at"], reverse=True)
+    finally:
+        db.close()
+
+
+def load_bookshelf(subject, user_id):
+    clean_subject = normalize_subject_title(subject) or "学習相談"
+    db = SessionLocal()
+
+    try:
+        textbooks = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.user_id == user_id)
+            .filter(StudyTextbook.subject == clean_subject)
+            .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+            .all()
+        )
+
+        return {
+            "subject": clean_subject,
+            "textbooks": [
+                serialize_textbook_summary(textbook)
+                for textbook in textbooks
+            ]
+        }
+    finally:
+        db.close()
+
+
+def load_textbook_options_for_subject(subject, user_id):
+    clean_subject = normalize_subject_title(subject)
+
+    if not clean_subject:
+        return []
+
+    db = SessionLocal()
+
+    try:
+        textbooks = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.user_id == user_id)
+            .filter(StudyTextbook.subject == clean_subject)
+            .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+            .limit(8)
+            .all()
+        )
+
+        return [
+            {
+                "id": textbook.id,
+                "title": textbook.title,
+                "updated_at": format_date(textbook.updated_at)
+            }
+            for textbook in textbooks
+        ]
+    finally:
+        db.close()
+
+
+def format_textbook_source_material(thread_id, user_id):
+    chat_items = load_chat_items(thread_id, user_id)
+    recent_items = chat_items[-16:]
+
+    if not recent_items:
+        return "まだ授業内容はありません。"
+
+    source_text = ""
+
+    for item in recent_items:
+        role_label = "ユーザー" if item["role"] == "user" else "先生"
+        source_text += f"{role_label}: {item['content']}\n"
+
+    return source_text
+
+
+def fallback_textbook_preview(thread, user_id, source_material):
+    existing_textbooks = load_textbook_options_for_subject(thread.title, user_id)
+    first_existing = existing_textbooks[0] if existing_textbooks else None
+    action_mode = "update" if first_existing else "create"
+
+    return {
+        "mode": action_mode,
+        "target_textbook_id": first_existing["id"] if first_existing else None,
+        "target_textbook_title": first_existing["title"] if first_existing else "",
+        "title": f"{thread.title}の授業まとめ",
+        "bookshelf_subject": thread.title,
+        "basic_explanation": "直近の授業内容を、後から読み返せる形で整理します。",
+        "concrete_examples": source_material[:900],
+        "key_points": "授業で扱った重要な考え方を復習します。",
+        "weak_points": "会話の中で分かりにくそうだった内容を確認します。",
+        "unclear_points": "まだ曖昧な内容は、次回の授業で先生に質問できます。",
+        "common_mistakes": "似た言葉や処理の違いを混同しないように注意します。",
+        "check_questions": "1. 今日扱った内容を自分の言葉で説明してください。",
+        "application_questions": "1. 今日の内容を使って、短い例を1つ作ってください。",
+        "model_answers": "自分の回答と授業内容を照らし合わせて確認してください。",
+        "detailed_explanations": "分からない部分は、教科書詳細の「先生に質問する」から授業へ戻れます。",
+        "related_textbooks": "",
+        "update_summary": "直近の授業内容を教科書に追加します。"
+    }
+
+
+def normalize_textbook_preview(raw_data, thread, user_id):
+    data = raw_data if isinstance(raw_data, dict) else {}
+    subject = normalize_subject_title(data.get("bookshelf_subject") or thread.title) or thread.title
+    existing_ids = {
+        item["id"]: item["title"]
+        for item in load_textbook_options_for_subject(subject, user_id)
+    }
+    mode = data.get("mode") if data.get("mode") in ["create", "update"] else "create"
+    target_textbook_id = data.get("target_textbook_id")
+
+    try:
+        target_textbook_id = int(target_textbook_id) if target_textbook_id else None
+    except (TypeError, ValueError):
+        target_textbook_id = None
+
+    if mode == "update" and target_textbook_id not in existing_ids:
+        mode = "create"
+        target_textbook_id = None
+
+    title = truncate_text(data.get("title") or f"{subject}の授業まとめ", 120)
+
+    preview = {
+        "mode": mode,
+        "target_textbook_id": target_textbook_id,
+        "target_textbook_title": existing_ids.get(target_textbook_id, ""),
+        "title": title,
+        "bookshelf_subject": subject,
+        "update_summary": (data.get("update_summary") or "授業内容を教科書に反映します。").strip()
+    }
+
+    for field_name in TEXTBOOK_CONTENT_FIELDS:
+        value = data.get(field_name)
+        if isinstance(value, list):
+            value = "\n".join([str(item).strip() for item in value if str(item).strip()])
+        preview[field_name] = (value or "").strip()
+
+    return preview
+
+
+def create_textbook_preview(thread, user_id, source_note=""):
+    source_material = format_textbook_source_material(thread.id, user_id)
+    memories = load_memories(user_id)
+    existing_textbooks = load_textbook_options_for_subject(thread.title, user_id)
+
+    try:
+        response = client.responses.create(
+            model="gpt-4.1-mini",
+            input=f"""
+あなたはStudy PASの教科書編集者です。
+直近の授業内容から、ユーザー専用の教科書プレビューを作ってください。
+
+重要なルール:
+- ユーザーが承認する前なので、保存した前提で書かない。
+- 後から見返した時に分かりやすいタイトルを自動生成する。
+- 既存教科書に近い内容がある場合は mode を "update" にし、target_textbook_id に既存教科書のidを入れる。
+- 近い教科書がなければ mode を "create" にする。
+- 取得できない情報は無理に作らず、会話とMemoryから分かる範囲で書く。
+- 理解確認問題は5問、応用問題は10問を作る。
+- 模範解答と詳しい解説も作る。
+- 必ずJSONだけで返す。
+
+返答形式:
+{{
+  "mode": "create",
+  "target_textbook_id": null,
+  "title": "Pythonの戻り値（return）の基本と使い方",
+  "bookshelf_subject": "{thread.title}",
+  "basic_explanation": "",
+  "concrete_examples": "",
+  "key_points": "",
+  "weak_points": "",
+  "unclear_points": "",
+  "common_mistakes": "",
+  "check_questions": "",
+  "application_questions": "",
+  "model_answers": "",
+  "detailed_explanations": "",
+  "related_textbooks": "",
+  "update_summary": ""
+}}
+
+科目:
+{thread.title}
+
+既存教科書:
+{json.dumps(existing_textbooks, ensure_ascii=False)}
+
+共有Memory:
+{memories}
+
+ユーザー補足:
+{source_note}
+
+直近の授業:
+{source_material}
+"""
+        )
+        preview_data = json.loads(response.output_text)
+        return normalize_textbook_preview(preview_data, thread, user_id)
+    except Exception:
+        return fallback_textbook_preview(thread, user_id, source_material)
+
+
+def append_textbook_section(current_text, added_text):
+    current_text = (current_text or "").strip()
+    added_text = (added_text or "").strip()
+
+    if not added_text:
+        return current_text
+
+    if not current_text:
+        return added_text
+
+    date_label = app_now().strftime("%Y-%m-%d")
+    return f"{current_text}\n\n---\n\n{date_label} 追記\n{added_text}"
+
+
+def confirm_textbook_preview(payload, user_id):
+    thread = load_chat_thread(payload.thread_id, user_id)
+
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return None
+
+    title = truncate_text(payload.title or f"{thread.title}の授業まとめ", 180)
+    subject = normalize_subject_title(payload.bookshelf_subject or thread.title) or thread.title
+    mode = payload.mode if payload.mode in ["create", "update"] else "create"
+    update_summary = (payload.update_summary or "授業内容を教科書に反映しました。").strip()
+
+    db = SessionLocal()
+
+    try:
+        textbook = None
+
+        if mode == "update" and payload.target_textbook_id:
+            textbook = (
+                db.query(StudyTextbook)
+                .filter(StudyTextbook.id == payload.target_textbook_id)
+                .filter(StudyTextbook.user_id == user_id)
+                .first()
+            )
+
+        if textbook:
+            textbook.title = textbook.title or title
+            textbook.subject = textbook.subject or subject
+            textbook.thread_id = textbook.thread_id or thread.id
+
+            for field_name in TEXTBOOK_CONTENT_FIELDS:
+                current_value = getattr(textbook, field_name)
+                added_value = getattr(payload, field_name)
+                setattr(textbook, field_name, append_textbook_section(current_value, added_value))
+
+            textbook.updated_at = app_now()
+            action_type = "updated"
+        else:
+            textbook = StudyTextbook(
+                user_id=user_id,
+                thread_id=thread.id,
+                subject=subject,
+                title=title,
+                basic_explanation=payload.basic_explanation,
+                concrete_examples=payload.concrete_examples,
+                key_points=payload.key_points,
+                weak_points=payload.weak_points,
+                unclear_points=payload.unclear_points,
+                common_mistakes=payload.common_mistakes,
+                check_questions=payload.check_questions,
+                application_questions=payload.application_questions,
+                model_answers=payload.model_answers,
+                detailed_explanations=payload.detailed_explanations,
+                related_textbooks=payload.related_textbooks
+            )
+            db.add(textbook)
+            db.flush()
+            action_type = "created"
+
+        history = StudyTextbookUpdate(
+            user_id=user_id,
+            textbook_id=textbook.id,
+            action_type=action_type,
+            summary=update_summary if action_type == "updated" else "教科書を作成"
+        )
+        db.add(history)
+        db.commit()
+        db.refresh(textbook)
+
+        updates = (
+            db.query(StudyTextbookUpdate)
+            .filter(StudyTextbookUpdate.user_id == user_id)
+            .filter(StudyTextbookUpdate.textbook_id == textbook.id)
+            .order_by(StudyTextbookUpdate.created_at.desc())
+            .all()
+        )
+
+        return serialize_textbook_detail(textbook, updates)
     finally:
         db.close()
 
@@ -3312,6 +3826,84 @@ def api_chat_thread_delete(request: Request, thread_id: int):
     return {"ok": True}
 
 
+@app.get("/api/bookshelves")
+def api_bookshelves(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    return {
+        "bookshelves": load_bookshelves(current_user.id)
+    }
+
+
+@app.get("/api/bookshelves/{subject}")
+def api_bookshelf(request: Request, subject: str):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    return load_bookshelf(subject, current_user.id)
+
+
+@app.get("/api/textbooks/{textbook_id}")
+def api_textbook_detail(request: Request, textbook_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    textbook = load_textbook(textbook_id, current_user.id)
+
+    if textbook is None:
+        return JSONResponse({"error": "textbook_not_found"}, status_code=404)
+
+    return {
+        "textbook": textbook
+    }
+
+
+@app.post("/api/chat/{thread_id}/textbook_preview")
+def api_textbook_preview(request: Request, thread_id: int, payload: TextbookPreviewPayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    thread = load_chat_thread(thread_id, current_user.id)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    if thread.thread_type != STUDY_THREAD_TYPE:
+        return JSONResponse({"error": "study_thread_required"}, status_code=400)
+
+    preview = create_textbook_preview(thread, current_user.id, payload.source_note)
+
+    return {
+        "preview": preview
+    }
+
+
+@app.post("/api/textbooks/confirm")
+def api_textbook_confirm(request: Request, payload: TextbookConfirmPayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    textbook = confirm_textbook_preview(payload, current_user.id)
+
+    if textbook is None:
+        return JSONResponse({"error": "textbook_save_failed"}, status_code=400)
+
+    return {
+        "textbook": textbook
+    }
+
+
 @app.get("/")
 def home(request: Request):
     current_user = get_current_user(request)
@@ -3344,6 +3936,37 @@ def chat_thread_page(request: Request, thread_id: int, draft: str = ""):
         return RedirectResponse(url="/", status_code=303)
 
     return render_react_app(request, current_user)
+
+
+@app.get("/bookshelves")
+def bookshelves_page(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return render_react_app(request, current_user)
+
+
+@app.get("/bookshelf/{subject}")
+def bookshelf_page(request: Request, subject: str):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return render_react_app(request, current_user)
+
+
+@app.get("/textbook/{textbook_id}")
+def textbook_page(request: Request, textbook_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return render_react_app(request, current_user)
+
 
 @app.post("/chat_threads")
 def chat_thread_create(

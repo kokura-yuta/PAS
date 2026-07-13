@@ -124,9 +124,19 @@
             });
         }
 
-        const screen = route.startsWith("/chat")
-            ? h(ChatScreen, { route, navigate })
-            : h(HomeScreen, { navigate });
+        let screen;
+
+        if (route.startsWith("/chat")) {
+            screen = h(ChatScreen, { route, navigate });
+        } else if (route === "/bookshelves") {
+            screen = h(BookshelvesScreen, { navigate });
+        } else if (route.startsWith("/bookshelf/")) {
+            screen = h(BookshelfScreen, { route, navigate });
+        } else if (route.startsWith("/textbook/")) {
+            screen = h(TextbookScreen, { route, navigate });
+        } else {
+            screen = h(HomeScreen, { navigate });
+        }
         const screenClass = [
             "study-screen",
             `study-screen-${screenState}`,
@@ -272,6 +282,16 @@
                         "div",
                         { className: "study-menu-panel" },
                         h("p", null, userName),
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: function () {
+                                    navigate("/bookshelves", { message: "本棚を開いています" });
+                                }
+                            },
+                            "本棚"
+                        ),
                         h("a", { href: "/memories" }, "Memory"),
                         h(
                             "form",
@@ -446,6 +466,298 @@
         );
     }
 
+    function BookshelvesScreen({ navigate }) {
+        const [data, setData] = useState(null);
+        const [error, setError] = useState("");
+
+        useEffect(function () {
+            let active = true;
+
+            api("/api/bookshelves")
+                .then(function (response) {
+                    if (active) {
+                        setData(response);
+                    }
+                })
+                .catch(function () {
+                    if (active) {
+                        setError("本棚を読み込めませんでした。");
+                    }
+                });
+
+            return function () {
+                active = false;
+            };
+        }, []);
+
+        const bookshelves = data ? data.bookshelves : [];
+
+        return h(
+            "main",
+            { className: "study-app study-library" },
+            h(
+                "header",
+                { className: "study-chat-header library-header" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "plain-back",
+                        onClick: function () {
+                            navigate("/", { direction: "back", message: "ホームへ戻っています" });
+                        }
+                    },
+                    "戻る"
+                ),
+                h(
+                    "div",
+                    null,
+                    h("p", { className: "eyebrow" }, "Bookshelf"),
+                    h("h1", null, "本棚")
+                ),
+                h("span", null)
+            ),
+            h(
+                "section",
+                { className: "library-intro" },
+                h("p", { className: "section-kicker" }, "自分専用の教科書"),
+                h("h2", null, "授業から作った教科書を、分野ごとに読む。"),
+                h("p", null, "教科書はユーザーが承認した内容だけ保存されます。")
+            ),
+            error ? h("p", { className: "notice" }, error) : null,
+            !data
+                ? h("p", { className: "react-loading" }, "読み込み中")
+                : bookshelves.length
+                    ? h(
+                        "section",
+                        { className: "bookshelf-grid" },
+                        bookshelves.map(function (shelf) {
+                            return h(
+                                "button",
+                                {
+                                    key: shelf.subject,
+                                    type: "button",
+                                    className: "bookshelf-card",
+                                    onClick: function () {
+                                        navigate(shelf.url, { message: "本棚を開いています" });
+                                    }
+                                },
+                                h("span", null, shelf.subject),
+                                h("strong", null, `${shelf.textbook_count}冊`),
+                                h("small", null, shelf.latest_updated_at ? `更新 ${shelf.latest_updated_at}` : "まだ教科書はありません")
+                            );
+                        })
+                    )
+                    : h(
+                        "section",
+                        { className: "study-empty" },
+                        h("p", null, "まだ本棚はありません。授業画面から「教科書にする」を押すと作れます。")
+                    )
+        );
+    }
+
+    function BookshelfScreen({ route, navigate }) {
+        const subject = decodeURIComponent(route.replace(/^\/bookshelf\//, ""));
+        const [data, setData] = useState(null);
+        const [error, setError] = useState("");
+
+        useEffect(function () {
+            let active = true;
+            setData(null);
+            setError("");
+
+            api(`/api/bookshelves/${encodeURIComponent(subject)}`)
+                .then(function (response) {
+                    if (active) {
+                        setData(response);
+                    }
+                })
+                .catch(function () {
+                    if (active) {
+                        setError("この本棚を読み込めませんでした。");
+                    }
+                });
+
+            return function () {
+                active = false;
+            };
+        }, [subject]);
+
+        const textbooks = data ? data.textbooks : [];
+
+        return h(
+            "main",
+            { className: "study-app study-library" },
+            h(
+                "header",
+                { className: "study-chat-header library-header" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "plain-back",
+                        onClick: function () {
+                            navigate("/bookshelves", { direction: "back", message: "本棚へ戻っています" });
+                        }
+                    },
+                    "戻る"
+                ),
+                h(
+                    "div",
+                    null,
+                    h("p", { className: "eyebrow" }, "Bookshelf"),
+                    h("h1", null, subject || "本棚")
+                ),
+                h("span", null)
+            ),
+            error ? h("p", { className: "notice" }, error) : null,
+            !data
+                ? h("p", { className: "react-loading" }, "読み込み中")
+                : textbooks.length
+                    ? h(
+                        "section",
+                        { className: "textbook-list" },
+                        textbooks.map(function (textbook) {
+                            return h(
+                                "button",
+                                {
+                                    key: textbook.id,
+                                    type: "button",
+                                    className: "textbook-card",
+                                    onClick: function () {
+                                        navigate(textbook.url, { message: "教科書を開いています" });
+                                    }
+                                },
+                                h("span", null, textbook.subject),
+                                h("strong", null, textbook.title),
+                                h("small", null, `作成 ${textbook.created_at || "-"} / 更新 ${textbook.updated_at || "-"}`)
+                            );
+                        })
+                    )
+                    : h(
+                        "section",
+                        { className: "study-empty" },
+                        h("p", null, "この分野の教科書はまだありません。授業画面から作成できます。")
+                    )
+        );
+    }
+
+    function TextbookScreen({ route, navigate }) {
+        const textbookIdMatch = route.match(/^\/textbook\/(\d+)/);
+        const textbookId = textbookIdMatch ? textbookIdMatch[1] : "";
+        const [data, setData] = useState(null);
+        const [error, setError] = useState("");
+
+        useEffect(function () {
+            let active = true;
+            setData(null);
+            setError("");
+
+            api(`/api/textbooks/${textbookId}`)
+                .then(function (response) {
+                    if (active) {
+                        setData(response);
+                    }
+                })
+                .catch(function () {
+                    if (active) {
+                        setError("教科書を読み込めませんでした。");
+                    }
+                });
+
+            return function () {
+                active = false;
+            };
+        }, [textbookId]);
+
+        const textbook = data ? data.textbook : null;
+        const sections = textbook ? textbook.sections.filter(function (section) {
+            return section.content && section.content.trim();
+        }) : [];
+
+        return h(
+            "main",
+            { className: "study-app study-textbook-page" },
+            h(
+                "header",
+                { className: "study-chat-header library-header" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "plain-back",
+                        onClick: function () {
+                            const subject = textbook ? textbook.subject : "";
+                            navigate(subject ? `/bookshelf/${encodeURIComponent(subject)}` : "/bookshelves", {
+                                direction: "back",
+                                message: "本棚へ戻っています"
+                            });
+                        }
+                    },
+                    "戻る"
+                ),
+                h(
+                    "div",
+                    null,
+                    h("p", { className: "eyebrow" }, textbook ? textbook.subject : "Textbook"),
+                    h("h1", null, textbook ? textbook.title : "教科書")
+                ),
+                h("span", null)
+            ),
+            error ? h("p", { className: "notice" }, error) : null,
+            !textbook
+                ? h("p", { className: "react-loading" }, "読み込み中")
+                : h(
+                    React.Fragment,
+                    null,
+                    h(
+                        "section",
+                        { className: "textbook-meta-card" },
+                        h("span", null, `作成 ${textbook.created_at || "-"}`),
+                        h("span", null, `更新 ${textbook.updated_at || "-"}`),
+                        h("span", null, textbook.subject)
+                    ),
+                    h(
+                        "article",
+                        { className: "textbook-reader" },
+                        sections.map(function (section) {
+                            return h(
+                                "section",
+                                { key: section.key, className: "textbook-section" },
+                                h("h2", null, section.label),
+                                h("p", null, section.content)
+                            );
+                        })
+                    ),
+                    textbook.updates && textbook.updates.length
+                        ? h(
+                            "section",
+                            { className: "textbook-updates" },
+                            h("h2", null, "更新履歴"),
+                            textbook.updates.map(function (update) {
+                                return h(
+                                    "p",
+                                    { key: update.id },
+                                    `${update.created_at}: ${update.summary}`
+                                );
+                            })
+                        )
+                        : null,
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "ask-teacher-button",
+                            onClick: function () {
+                                navigate(`/chat/${textbook.thread_id}`, { message: "先生の授業へ戻っています" });
+                            }
+                        },
+                        "この内容を先生に質問する"
+                    )
+                )
+        );
+    }
+
     function ChatScreen({ route, navigate }) {
         const [chatData, setChatData] = useState(null);
         const [message, setMessage] = useState("");
@@ -453,6 +765,9 @@
         const [sending, setSending] = useState(false);
         const [sendingLabel, setSendingLabel] = useState("");
         const [error, setError] = useState("");
+        const [textbookPreview, setTextbookPreview] = useState(null);
+        const [previewingTextbook, setPreviewingTextbook] = useState(false);
+        const [savingTextbook, setSavingTextbook] = useState(false);
         const fileInputRef = useRef(null);
 
         const threadIdMatch = route.match(/^\/chat\/(\d+)/);
@@ -464,6 +779,7 @@
             setChatData(null);
             setError("");
             setFile(null);
+            setTextbookPreview(null);
 
             api(apiPath)
                 .then(function (data) {
@@ -586,6 +902,80 @@
             postTextMessage(action.message, action.label);
         }
 
+        async function createTextbookPreview() {
+            if (!chatData || previewingTextbook || savingTextbook) {
+                return;
+            }
+
+            setPreviewingTextbook(true);
+            setError("");
+            setTextbookPreview(null);
+
+            try {
+                const data = await api(`/api/chat/${chatData.thread.id}/textbook_preview`, {
+                    method: "POST",
+                    body: JSON.stringify({ source_note: "" })
+                });
+
+                if (data && data.preview) {
+                    setTextbookPreview(data.preview);
+                    window.setTimeout(function () {
+                        const preview = document.querySelector(".textbook-preview-card");
+                        if (preview) {
+                            preview.scrollIntoView({ behavior: "smooth", block: "center" });
+                        }
+                    }, 80);
+                }
+            } catch (err) {
+                setError("教科書プレビューを作れませんでした。もう一度試してください。");
+            } finally {
+                setPreviewingTextbook(false);
+            }
+        }
+
+        async function confirmTextbookPreview() {
+            if (!chatData || !textbookPreview || savingTextbook) {
+                return;
+            }
+
+            setSavingTextbook(true);
+            setError("");
+
+            try {
+                const data = await api("/api/textbooks/confirm", {
+                    method: "POST",
+                    body: JSON.stringify({
+                        thread_id: chatData.thread.id,
+                        mode: textbookPreview.mode || "create",
+                        target_textbook_id: textbookPreview.target_textbook_id || null,
+                        title: textbookPreview.title || "",
+                        bookshelf_subject: textbookPreview.bookshelf_subject || chatData.thread.title,
+                        basic_explanation: textbookPreview.basic_explanation || "",
+                        concrete_examples: textbookPreview.concrete_examples || "",
+                        key_points: textbookPreview.key_points || "",
+                        weak_points: textbookPreview.weak_points || "",
+                        unclear_points: textbookPreview.unclear_points || "",
+                        common_mistakes: textbookPreview.common_mistakes || "",
+                        check_questions: textbookPreview.check_questions || "",
+                        application_questions: textbookPreview.application_questions || "",
+                        model_answers: textbookPreview.model_answers || "",
+                        detailed_explanations: textbookPreview.detailed_explanations || "",
+                        related_textbooks: textbookPreview.related_textbooks || "",
+                        update_summary: textbookPreview.update_summary || ""
+                    })
+                });
+
+                if (data && data.textbook) {
+                    setTextbookPreview(null);
+                    navigate(data.textbook.url, { message: "教科書を開いています" });
+                }
+            } catch (err) {
+                setError("教科書を保存できませんでした。もう一度試してください。");
+            } finally {
+                setSavingTextbook(false);
+            }
+        }
+
         async function deleteThread() {
             if (!chatData || !chatData.thread.can_delete) {
                 return;
@@ -690,12 +1080,97 @@
                     ? h(ThinkingBubble, { label: sendingLabel })
                     : null
             ),
+            textbookPreview
+                ? h(
+                    "section",
+                    { className: "textbook-preview-card" },
+                    h(
+                        "div",
+                        { className: "textbook-preview-head" },
+                        h("p", { className: "section-kicker" }, textbookPreview.mode === "update" ? "更新プレビュー" : "作成プレビュー"),
+                        h("h2", null, textbookPreview.title || "教科書プレビュー"),
+                        h(
+                            "small",
+                            null,
+                            textbookPreview.mode === "update" && textbookPreview.target_textbook_title
+                                ? `更新先: ${textbookPreview.target_textbook_title}`
+                                : `保存先の本棚: ${textbookPreview.bookshelf_subject || thread.title}`
+                        )
+                    ),
+                    h(
+                        "div",
+                        { className: "textbook-preview-body" },
+                        h("strong", null, "追加予定の内容"),
+                        h("p", null, textbookPreview.update_summary || textbookPreview.basic_explanation || "直近の授業内容を教科書に整理します。")
+                    ),
+                    h(
+                        "details",
+                        { className: "textbook-preview-details" },
+                        h("summary", null, "内容を確認する"),
+                        ["basic_explanation", "key_points", "weak_points", "unclear_points", "check_questions", "application_questions"].map(function (field) {
+                            const labels = {
+                                basic_explanation: "基本説明",
+                                key_points: "重要ポイント",
+                                weak_points: "苦手ポイント",
+                                unclear_points: "まだ曖昧な内容",
+                                check_questions: "理解確認問題",
+                                application_questions: "応用問題"
+                            };
+                            return textbookPreview[field]
+                                ? h(
+                                    "div",
+                                    { key: field },
+                                    h("h3", null, labels[field]),
+                                    h("p", null, textbookPreview[field])
+                                )
+                                : null;
+                        })
+                    ),
+                    h(
+                        "div",
+                        { className: "textbook-preview-actions" },
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: confirmTextbookPreview,
+                                disabled: savingTextbook
+                            },
+                            savingTextbook
+                                ? h(LoadingLabel, { text: "保存中" })
+                                : (textbookPreview.mode === "update" ? "更新する" : "教科書を作成")
+                        ),
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                className: "secondary-button",
+                                onClick: function () {
+                                    setTextbookPreview(null);
+                                },
+                                disabled: savingTextbook
+                            },
+                            textbookPreview.mode === "update" ? "今回は更新しない" : "今回は作成しない"
+                        )
+                    )
+                )
+                : null,
             h(
                 "div",
                 { className: "study-chat-controls" },
                 h(
                     "section",
                     { className: "lesson-actions", "aria-label": "授業アクション" },
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "textbook-action",
+                            onClick: createTextbookPreview,
+                            disabled: previewingTextbook || savingTextbook || !chatData
+                        },
+                        previewingTextbook ? h(LoadingLabel, { text: "作成中" }) : "教科書にする"
+                    ),
                     lessonActions.map(function (action) {
                         return h(
                             "button",
