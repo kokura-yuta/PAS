@@ -783,21 +783,25 @@ body:has(.study-app) {
     margin-bottom: 4px;
 }
 
+.study-library .library-header,
 .study-textbook-page .library-header {
     display: grid;
     grid-template-columns: 72px minmax(0, 1fr) 72px;
     align-items: center;
 }
 
+.study-library .plain-back,
 .study-textbook-page .plain-back {
     justify-self: start;
 }
 
+.library-title-block,
 .textbook-title-block {
     min-width: 0;
     text-align: center;
 }
 
+.library-title-block h1,
 .textbook-title-block h1 {
     margin-right: auto;
     margin-left: auto;
@@ -830,6 +834,8 @@ body:has(.study-app) {
 .textbook-list {
     display: grid;
     gap: 12px;
+    justify-self: center;
+    width: min(100%, 760px);
 }
 
 .bookshelf-card,

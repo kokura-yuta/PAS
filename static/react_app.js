@@ -511,7 +511,7 @@
                 ),
                 h(
                     "div",
-                    null,
+                    { className: "library-title-block" },
                     h("p", { className: "eyebrow" }, "Bookshelf"),
                     h("h1", null, "本棚")
                 ),
@@ -560,7 +560,6 @@
         const subject = decodeURIComponent(route.replace(/^\/bookshelf\//, ""));
         const [data, setData] = useState(null);
         const [error, setError] = useState("");
-        const [startingLesson, setStartingLesson] = useState("");
 
         useEffect(function () {
             let active = true;
@@ -585,38 +584,6 @@
         }, [subject]);
 
         const textbooks = data ? data.textbooks : [];
-        const roadmap = data ? data.roadmap || [] : [];
-
-        async function startRoadmapLesson(item) {
-            if (startingLesson) {
-                return;
-            }
-
-            setStartingLesson(item.title);
-            setError("");
-
-            try {
-                if (data && data.chat_url) {
-                    navigate(data.chat_url, { message: `${item.title}の授業を準備しています` });
-                    return;
-                }
-
-                const response = await api("/api/chat_threads", {
-                    method: "POST",
-                    body: JSON.stringify({
-                        title: subject,
-                        thread_type: "study"
-                    })
-                });
-
-                if (response && response.url) {
-                    navigate(response.url, { message: `${item.title}の授業を準備しています` });
-                }
-            } catch (err) {
-                setError("授業を開始できませんでした。");
-                setStartingLesson("");
-            }
-        }
 
         return h(
             "main",
@@ -637,7 +604,7 @@
                 ),
                 h(
                     "div",
-                    null,
+                    { className: "library-title-block" },
                     h("p", { className: "eyebrow" }, "Bookshelf"),
                     h("h1", null, subject || "本棚")
                 ),
@@ -649,50 +616,6 @@
                 : h(
                     React.Fragment,
                     null,
-                    roadmap.length
-                        ? h(
-                            "section",
-                            { className: "roadmap-card" },
-                            h("p", { className: "section-kicker" }, "学習ロードマップ"),
-                            h("h2", null, "次に進みやすい順番"),
-                            h(
-                                "div",
-                                { className: "roadmap-list" },
-                                roadmap.map(function (item, index) {
-                                    const statusLabels = {
-                                        learned: "理解済み",
-                                        learning: "学習中",
-                                        review: "復習",
-                                        not_started: "未学習"
-                                    };
-
-                                    return h(
-                                        "article",
-                                        { key: item.id || item.title, className: `roadmap-item roadmap-${item.status || "not_started"}` },
-                                        h("span", null, String(index + 1).padStart(2, "0")),
-                                        h(
-                                            "div",
-                                            null,
-                                            h("strong", null, item.title),
-                                            h("small", null, item.reason || "この順番で進むと理解しやすくなります。")
-                                        ),
-                                        h("em", null, statusLabels[item.status] || "未学習"),
-                                        h(
-                                            "button",
-                                            {
-                                                type: "button",
-                                                onClick: function () {
-                                                    startRoadmapLesson(item);
-                                                },
-                                                disabled: Boolean(startingLesson)
-                                            },
-                                            startingLesson === item.title ? h(LoadingLabel, { text: "準備中" }) : "この単元から始める"
-                                        )
-                                    );
-                                })
-                            )
-                        )
-                        : null,
                     textbooks.length
                         ? h(
                             "section",
