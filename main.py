@@ -97,6 +97,31 @@ ROADMAP_SKIP_WORDS = [
     "ここは飛ば",
     "この単元は飛ば"
 ]
+LESSON_LEVEL_ORDER = [
+    "term",
+    "short_answer",
+    "code_reading",
+    "code_fix",
+    "code_creation",
+    "mini_app"
+]
+LESSON_LEVEL_LABELS = {
+    "term": "用語確認",
+    "short_answer": "記述問題",
+    "code_reading": "コード読解",
+    "code_fix": "コード修正",
+    "code_creation": "コード作成",
+    "mini_app": "ミニアプリ制作"
+}
+LESSON_UNDERSTOOD_WORDS = [
+    "わかった",
+    "分かった",
+    "理解した",
+    "できた",
+    "いけた",
+    "正解",
+    "なるほど"
+]
 STUDY_IMAGE_MAX_BYTES = 7 * 1024 * 1024
 STUDY_MEMORY_CATEGORIES = {
     "understanding",
@@ -518,12 +543,31 @@ class StudyRoadmapItem(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, index=True)
+    thread_id = Column(Integer, index=True)
     subject = Column(String(100), index=True)
     title = Column(String(255))
     status = Column(String(50), default="not_started")
     reason = Column(Text)
     sort_order = Column(Integer, default=0)
     source_type = Column(String(50), default="ai")
+    created_at = Column(DateTime, default=app_now)
+    updated_at = Column(DateTime, default=app_now, onupdate=app_now)
+
+
+class StudyLessonState(Base):
+    __tablename__ = "study_lesson_states"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    thread_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    live_understanding = Column(Integer, default=35)
+    question_level = Column(String(50), default="term")
+    current_focus = Column(String(255))
+    mastered_points = Column(Text)
+    weak_points = Column(Text)
+    recent_problem_history = Column(Text)
+    last_signal = Column(Text)
     created_at = Column(DateTime, default=app_now)
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
@@ -592,6 +636,7 @@ def ensure_user_id_columns():
         "study_understandings",
         "study_assessments",
         "study_roadmap_items",
+        "study_lesson_states",
         "password_reset_tokens"
     ]
 
@@ -638,6 +683,39 @@ def ensure_study_learning_columns():
 
 
 ensure_study_learning_columns()
+
+
+def ensure_study_roadmap_columns():
+    ensure_columns(
+        "study_roadmap_items",
+        {
+            "thread_id": "INTEGER"
+        }
+    )
+
+
+ensure_study_roadmap_columns()
+
+
+def ensure_study_lesson_state_columns():
+    ensure_columns(
+        "study_lesson_states",
+        {
+            "thread_id": "INTEGER",
+            "subject": "VARCHAR(100)",
+            "live_understanding": "INTEGER DEFAULT 35",
+            "question_level": "VARCHAR(50) DEFAULT 'term'",
+            "current_focus": "VARCHAR(255)",
+            "mastered_points": "TEXT",
+            "weak_points": "TEXT",
+            "recent_problem_history": "TEXT",
+            "last_signal": "TEXT",
+            "updated_at": "TIMESTAMP"
+        }
+    )
+
+
+ensure_study_lesson_state_columns()
 
 def normalize_email(email):
     return (email or "").strip().lower()
@@ -891,7 +969,8 @@ def claim_unowned_data(user_id):
         "study_textbook_updates",
         "study_understandings",
         "study_assessments",
-        "study_roadmap_items"
+        "study_roadmap_items",
+        "study_lesson_states"
     ]
 
     with engine.begin() as connection:
@@ -1527,6 +1606,7 @@ def serialize_assessment(assessment):
 def serialize_roadmap_item(item):
     return {
         "id": item.id,
+        "thread_id": item.thread_id,
         "subject": item.subject,
         "title": item.title or "",
         "status": item.status or "not_started",
@@ -1795,6 +1875,7 @@ def apply_roadmap_message_intent(db, roadmap_items, message):
         if item is not None:
             item.status = "skipped"
             item.reason = "ユーザーがこの単元を飛ばすと決めたため、以後は必要な前提だけ補足します。"
+            item.source_type = "user"
             item.updated_at = app_now()
             db.commit()
             intent = {
@@ -1808,6 +1889,7 @@ def apply_roadmap_message_intent(db, roadmap_items, message):
         if item is not None and normalize_roadmap_status(item.status) == "not_started":
             item.status = "learning"
             item.reason = "ユーザーがロードマップ通りに進むと決めたため、現在の授業位置として開始します。"
+            item.source_type = "user"
             item.updated_at = app_now()
             db.commit()
 
@@ -1911,14 +1993,41 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
         return None
 
 
-def load_or_create_roadmap(db, user_id, subject, textbooks, understandings):
-    existing_items = (
+def load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread_id=None):
+    base_query = (
         db.query(StudyRoadmapItem)
         .filter(StudyRoadmapItem.user_id == user_id)
         .filter(StudyRoadmapItem.subject == subject)
+    )
+    query = base_query
+
+    if thread_id is not None:
+        query = query.filter(StudyRoadmapItem.thread_id == thread_id)
+
+    existing_items = (
+        query
         .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
         .all()
     )
+
+    if not existing_items and thread_id is not None:
+        unassigned_items = (
+            base_query
+            .filter(StudyRoadmapItem.thread_id.is_(None))
+            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+            .all()
+        )
+
+        for item in unassigned_items:
+            item.thread_id = thread_id
+
+        if unassigned_items:
+            db.commit()
+            existing_items = (
+                query
+                .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+                .all()
+            )
 
     if not existing_items:
         roadmap_items = generate_roadmap_items_with_ai(subject, textbooks, understandings)
@@ -1931,6 +2040,7 @@ def load_or_create_roadmap(db, user_id, subject, textbooks, understandings):
         for index, item in enumerate(roadmap_items):
             db.add(StudyRoadmapItem(
                 user_id=user_id,
+                thread_id=thread_id,
                 subject=subject,
                 title=item["title"],
                 status=item["status"],
@@ -1941,14 +2051,15 @@ def load_or_create_roadmap(db, user_id, subject, textbooks, understandings):
 
         db.commit()
         existing_items = (
-            db.query(StudyRoadmapItem)
-            .filter(StudyRoadmapItem.user_id == user_id)
-            .filter(StudyRoadmapItem.subject == subject)
+            query
             .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
             .all()
         )
 
     for item in existing_items:
+        if item.source_type == "reset":
+            continue
+
         inferred_status = infer_roadmap_status(item.title, textbooks, understandings)
         if inferred_status != "not_started" and item.status != inferred_status:
             item.status = inferred_status
@@ -1957,6 +2068,28 @@ def load_or_create_roadmap(db, user_id, subject, textbooks, understandings):
     db.commit()
 
     return [serialize_roadmap_item(item) for item in existing_items]
+
+
+def reset_study_roadmap_for_thread(db, thread):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return
+
+    subject = normalize_subject_title(thread.title) or thread.title
+    roadmap_items = (
+        db.query(StudyRoadmapItem)
+        .filter(StudyRoadmapItem.user_id == thread.user_id)
+        .filter(StudyRoadmapItem.subject == subject)
+        .filter(or_(StudyRoadmapItem.thread_id == thread.id, StudyRoadmapItem.thread_id.is_(None)))
+        .all()
+    )
+
+    for item in roadmap_items:
+        item.status = "not_started"
+        item.reason = "この会話が削除されたため、現在の学習計画を初期状態に戻しました。教科書・Memory・理解度は保持しています。"
+        item.source_type = "reset"
+        item.updated_at = app_now()
+
+    db.query(StudyLessonState).filter(StudyLessonState.user_id == thread.user_id).filter(StudyLessonState.thread_id == thread.id).delete()
 
 
 def load_bookshelf(subject, user_id):
@@ -1992,7 +2125,14 @@ def load_bookshelf(subject, user_id):
         return {
             "subject": clean_subject,
             "chat_url": f"/chat/{study_thread.id}" if study_thread else "",
-            "roadmap": load_or_create_roadmap(db, user_id, clean_subject, textbooks, understandings),
+            "roadmap": load_or_create_roadmap(
+                db,
+                user_id,
+                clean_subject,
+                textbooks,
+                understandings,
+                study_thread.id if study_thread else None
+            ),
             "textbooks": [
                 serialize_textbook_summary(textbook)
                 for textbook in textbooks
@@ -2018,11 +2158,13 @@ def load_roadmap_overview(user_id):
         )
 
         chat_urls = {}
+        thread_ids = {}
 
         for thread in study_threads:
             subject = normalize_subject_title(thread.title) or "学習相談"
             subject_names.add(subject)
             chat_urls.setdefault(subject, f"/chat/{thread.id}")
+            thread_ids.setdefault(subject, thread.id)
 
         textbooks = (
             db.query(StudyTextbook)
@@ -2047,7 +2189,14 @@ def load_roadmap_overview(user_id):
                 .order_by(StudyUnderstanding.updated_at.desc())
                 .all()
             )
-            roadmap_items = load_or_create_roadmap(db, user_id, subject, subject_textbooks, understandings)
+            roadmap_items = load_or_create_roadmap(
+                db,
+                user_id,
+                subject,
+                subject_textbooks,
+                understandings,
+                thread_ids.get(subject)
+            )
             subject_understanding = next(
                 (
                     item
@@ -2150,6 +2299,192 @@ def format_understandings_for_prompt(understandings):
     return "\n".join(lines)
 
 
+def normalize_lesson_level(level):
+    return level if level in LESSON_LEVEL_ORDER else "term"
+
+
+def move_lesson_level(level, step):
+    current_level = normalize_lesson_level(level)
+    index = LESSON_LEVEL_ORDER.index(current_level)
+    next_index = max(0, min(len(LESSON_LEVEL_ORDER) - 1, index + step))
+    return LESSON_LEVEL_ORDER[next_index]
+
+
+def clamp_percent(value, default=35):
+    try:
+        percent = int(value)
+    except (TypeError, ValueError):
+        percent = default
+
+    return max(0, min(100, percent))
+
+
+def parse_recent_problem_history(text_value):
+    try:
+        data = json.loads(text_value or "[]")
+    except json.JSONDecodeError:
+        data = []
+
+    if not isinstance(data, list):
+        return []
+
+    return [
+        truncate_text(str(item), 140)
+        for item in data
+        if str(item).strip()
+    ][-8:]
+
+
+def load_or_create_lesson_state(db, user_id, thread_id, subject):
+    state = (
+        db.query(StudyLessonState)
+        .filter(StudyLessonState.user_id == user_id)
+        .filter(StudyLessonState.thread_id == thread_id)
+        .first()
+    )
+
+    if state is not None:
+        return state
+
+    state = StudyLessonState(
+        user_id=user_id,
+        thread_id=thread_id,
+        subject=subject,
+        live_understanding=35,
+        question_level="term",
+        current_focus="最初のつまずきを確認する"
+    )
+    db.add(state)
+    db.commit()
+    db.refresh(state)
+    return state
+
+
+def apply_lesson_message_signal(db, state, message):
+    message = (message or "").strip()
+
+    if state is None or not message:
+        return "授業中の理解判断: 新しい発言による変更なし"
+
+    understanding = clamp_percent(state.live_understanding, 35)
+    level = normalize_lesson_level(state.question_level)
+    signal = "授業中の理解判断: 新しい発言による変更なし"
+
+    if should_make_study_weak_note(message):
+        understanding = max(10, understanding - 14)
+        level = move_lesson_level(level, -1)
+        state.weak_points = truncate_text(
+            "\n".join(filter(None, [state.weak_points, f"直近のつまずき: {message}"])),
+            900
+        )
+        signal = "授業中の理解判断: ユーザーが分からないと言っているため、基礎へ少し戻す"
+    elif contains_any_word(message, LESSON_UNDERSTOOD_WORDS):
+        understanding = min(88, understanding + 12)
+        if understanding >= 65:
+            level = move_lesson_level(level, 1)
+        state.mastered_points = truncate_text(
+            "\n".join(filter(None, [state.mastered_points, f"理解できた反応: {message}"])),
+            900
+        )
+        signal = "授業中の理解判断: 理解できた反応があるため、次の難易度へ進める"
+    elif "応用問題" in message:
+        understanding = max(understanding, 58)
+        level = move_lesson_level(level, 1)
+        signal = "授業中の理解判断: 応用問題を希望しているため、少し実践寄りにする"
+    elif "理解確認" in message:
+        level = "short_answer"
+        signal = "授業中の理解判断: 理解確認を希望しているため、短い確認問題にする"
+
+    state.live_understanding = understanding
+    state.question_level = level
+    state.last_signal = signal
+    state.updated_at = app_now()
+    db.commit()
+    return signal
+
+
+def infer_problem_level_from_text(text_value):
+    text_value = text_value or ""
+
+    if "ミニアプリ" in text_value or "小さなアプリ" in text_value:
+        return "mini_app"
+    if "コードを書" in text_value or "実装" in text_value:
+        return "code_creation"
+    if "修正" in text_value or "直して" in text_value:
+        return "code_fix"
+    if "コード" in text_value or "読解" in text_value:
+        return "code_reading"
+    if "記述" in text_value or "理由" in text_value or "説明して" in text_value:
+        return "short_answer"
+    return "term"
+
+
+def extract_problem_prompt_summary(text_value):
+    lines = [line.strip() for line in (text_value or "").splitlines() if line.strip()]
+    candidates = []
+    markers = ["問題", "理解確認", "応用", "やってみよう", "考えてみて", "コード"]
+
+    for line in lines:
+        if any(marker in line for marker in markers):
+            candidates.append(line)
+
+    if not candidates:
+        return ""
+
+    return truncate_text(" / ".join(candidates[:3]), 220)
+
+
+def record_lesson_problem_history(thread, user_id, teacher_message):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return
+
+    problem_summary = extract_problem_prompt_summary(teacher_message)
+
+    if not problem_summary:
+        return
+
+    subject = normalize_subject_title(thread.title) or "学習相談"
+    db = SessionLocal()
+
+    try:
+        state = load_or_create_lesson_state(db, user_id, thread.id, subject)
+        history = parse_recent_problem_history(state.recent_problem_history)
+        history.append(problem_summary)
+        state.recent_problem_history = json.dumps(history[-8:], ensure_ascii=False)
+        state.question_level = infer_problem_level_from_text(teacher_message)
+        state.current_focus = truncate_text(problem_summary, 120)
+        state.updated_at = app_now()
+        db.commit()
+    finally:
+        db.close()
+
+
+def format_lesson_state_for_prompt(state):
+    if state is None:
+        return "授業中の一時判断はまだありません。最初は小さく理解確認してください。"
+
+    history = parse_recent_problem_history(state.recent_problem_history)
+    level = normalize_lesson_level(state.question_level)
+
+    return f"""
+授業中の一時判断（教科書理解度とは別）:
+- 現在の理解感: {clamp_percent(state.live_understanding, 35)}%
+- 今の問題レベル: {LESSON_LEVEL_LABELS.get(level, "用語確認")}
+- 現在の焦点: {state.current_focus or "未設定"}
+- 授業中に理解できたこと: {state.mastered_points or "まだ少ない"}
+- 授業中のつまずき: {state.weak_points or "まだ少ない"}
+- 最近出した問題: {", ".join(history) if history else "まだありません"}
+- 直近判断: {state.last_signal or "なし"}
+
+授業進行ルール:
+- 上の最近出した問題と同じ問題・似すぎた問題を繰り返さないでください。
+- 復習が必要な場合でも、問題文・状況・出題方法を変えてください。
+- 理解感が高い場合は、用語確認を続けず、記述→コード読解→コード修正→コード作成→ミニアプリ制作へ少しずつ進めてください。
+- 理解感が低い場合は、基礎へ戻し、説明を短く分けてください。
+- 毎回最初から説明し直さず、理解済みの内容は短く確認して次へ進んでください。
+"""
+
+
 def build_study_context_for_prompt(thread, user_id, latest_message=""):
     subject = normalize_subject_title(thread.title) or "学習相談"
     db = SessionLocal()
@@ -2170,11 +2505,12 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
             .all()
         )
 
-        load_or_create_roadmap(db, user_id, subject, textbooks, understandings)
+        load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread.id)
         roadmap_items = (
             db.query(StudyRoadmapItem)
             .filter(StudyRoadmapItem.user_id == user_id)
             .filter(StudyRoadmapItem.subject == subject)
+            .filter(StudyRoadmapItem.thread_id == thread.id)
             .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
             .all()
         )
@@ -2183,9 +2519,13 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
             db.query(StudyRoadmapItem)
             .filter(StudyRoadmapItem.user_id == user_id)
             .filter(StudyRoadmapItem.subject == subject)
+            .filter(StudyRoadmapItem.thread_id == thread.id)
             .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
             .all()
         )
+        lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
+        lesson_signal = apply_lesson_message_signal(db, lesson_state, latest_message)
+        lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
 
         intent_text = "今回のロードマップ指示: なし"
 
@@ -2215,6 +2555,10 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 
 理解度:
 {format_understandings_for_prompt(understandings)}
+
+授業中の進行状態:
+{format_lesson_state_for_prompt(lesson_state)}
+{lesson_signal}
 
 ロードマップ利用ルール:
 - 返答前に、必ず上のロードマップ・現在地・飛ばした単元・理解度を確認してください。
@@ -3030,6 +3374,7 @@ def delete_chat_thread(thread_id, user_id):
         if thread is None or thread.thread_type == DIARY_THREAD_TYPE:
             return
 
+        reset_study_roadmap_for_thread(db, thread)
         db.query(ChatMessage).filter(ChatMessage.user_id == user_id).filter(ChatMessage.thread_id == thread_id).delete()
         db.delete(thread)
         db.commit()
@@ -4358,6 +4703,11 @@ Study PASの基本方針:
 - 理解確認や問題を出す時は、一度に1問だけにしてください。
 - 「理解確認」と言われたら、今の内容から1問だけ出し、答えやすい形にしてください。
 - 「応用問題」と言われたら、少しだけ難しい1問を出し、必要ならヒントを1つ添えてください。
+- 授業中の一時理解度を見て、理解できている内容は繰り返し説明しすぎず、次の内容へ少し進めてください。
+- 同じ問題や似すぎた問題を何度も出さないでください。復習が必要な場合も、問題文・状況・出題方法を変えてください。
+- 問題の難易度は、用語確認 → 記述問題 → コード読解 → コード修正 → コード作成 → ミニアプリ制作、の順に少しずつ上げてください。
+- ユーザーが理解できていると判断できる時は、基礎問題を続けず、実践的な問題へ進めてください。
+- ユーザーがつまずいた時は、難易度を下げ、説明を小さく分けてから確認問題に戻ってください。
 - 「今日のまとめ」と言われたら、今日やったこと、覚えるポイント、次に復習することを短くまとめてください。
 - 「今日はここまで」と言われたら、学習レポートとして「できたこと」「まだ曖昧なこと」「次回やること」を短く整理し、最後に労う一言を添えてください。
 - 学習レポートでは、次回の最初に何をすればよいかが分かる1文を必ず入れてください。
@@ -4856,6 +5206,7 @@ def process_chat_message(thread, user_id, clean_message):
                 teacher_message=ai_message,
                 history=history
             )
+            record_lesson_problem_history(thread, user_id, ai_message)
 
     chat_items = load_chat_items(thread.id, user_id)
 
@@ -4935,6 +5286,7 @@ def stream_chat_message_events(thread, user_id, clean_message):
                     teacher_message=ai_message,
                     history=history
                 )
+                record_lesson_problem_history(thread, user_id, ai_message)
 
     yield sse_event("done", {"ok": True})
 
@@ -5017,6 +5369,7 @@ def process_study_image_message(thread, user_id, clean_message, image_bytes, con
                 teacher_message=ai_message,
                 history=history
             )
+            record_lesson_problem_history(thread, user_id, ai_message)
 
     chat_items = load_chat_items(thread.id, user_id)
 
