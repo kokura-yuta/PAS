@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, Form, File, UploadFile
-from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
@@ -12,6 +12,8 @@ import hashlib
 import secrets
 import base64
 import re
+import smtplib
+from email.message import EmailMessage
 from urllib.parse import quote
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -71,6 +73,30 @@ MEMORY_STATUS_LABELS = {
     "pending": "確認待ち"
 }
 SUBJECT_EXAMPLES = ["英語", "数学", "Python", "Java", "TOEIC", "基本情報", "大学数学"]
+ROADMAP_STATUSES = ["learned", "learning", "review", "not_started", "skipped"]
+ROADMAP_STATUS_LABELS = {
+    "learned": "理解済み",
+    "learning": "学習中",
+    "review": "復習",
+    "not_started": "未学習",
+    "skipped": "飛ばした単元"
+}
+ROADMAP_FOLLOW_WORDS = [
+    "ロードマップ通り",
+    "ロードマップどおり",
+    "おすすめ通り",
+    "おすすめどおり",
+    "順番通り",
+    "順番どおり"
+]
+ROADMAP_SKIP_WORDS = [
+    "飛ばす",
+    "飛ばして",
+    "飛ばした",
+    "スキップ",
+    "ここは飛ば",
+    "この単元は飛ば"
+]
 STUDY_IMAGE_MAX_BYTES = 7 * 1024 * 1024
 STUDY_MEMORY_CATEGORIES = {
     "understanding",
@@ -265,6 +291,17 @@ class User(Base):
     name = Column(String(100))
     email = Column(String(255), unique=True, index=True)
     password_hash = Column(Text)
+    created_at = Column(DateTime, default=app_now)
+
+
+class PasswordResetToken(Base):
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    token_hash = Column(Text, unique=True, index=True)
+    expires_at = Column(DateTime)
+    used_at = Column(DateTime)
     created_at = Column(DateTime, default=app_now)
 
 class ChatMessage(Base):
@@ -554,7 +591,8 @@ def ensure_user_id_columns():
         "study_textbook_updates",
         "study_understandings",
         "study_assessments",
-        "study_roadmap_items"
+        "study_roadmap_items",
+        "password_reset_tokens"
     ]
 
     for table_name in user_tables:
@@ -678,6 +716,142 @@ def authenticate_user(email, password):
         return user
     finally:
         db.close()
+
+
+def hash_reset_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def build_base_url(request):
+    configured_url = (os.getenv("APP_BASE_URL") or "").strip()
+
+    if configured_url:
+        return configured_url.rstrip("/")
+
+    return str(request.base_url).rstrip("/")
+
+
+def create_password_reset_token(email):
+    clean_email = normalize_email(email)
+
+    if not clean_email:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        user = db.query(User).filter(User.email == clean_email).first()
+
+        if user is None:
+            return None
+
+        token = secrets.token_urlsafe(32)
+        reset_token = PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_reset_token(token),
+            expires_at=app_now() + timedelta(minutes=45)
+        )
+
+        db.add(reset_token)
+        db.commit()
+        return token
+    finally:
+        db.close()
+
+
+def load_valid_password_reset_token(token):
+    token = (token or "").strip()
+
+    if not token:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        reset_token = (
+            db.query(PasswordResetToken)
+            .filter(PasswordResetToken.token_hash == hash_reset_token(token))
+            .filter(PasswordResetToken.used_at.is_(None))
+            .first()
+        )
+
+        if reset_token is None:
+            return None
+
+        if reset_token.expires_at is None or reset_token.expires_at < app_now():
+            return None
+
+        user = db.query(User).filter(User.id == reset_token.user_id).first()
+
+        if user is None:
+            return None
+
+        return {
+            "id": reset_token.id,
+            "user_id": user.id,
+            "email": user.email
+        }
+    finally:
+        db.close()
+
+
+def reset_user_password(token, password):
+    if len(password or "") < PASSWORD_MIN_LENGTH:
+        return False
+
+    token_data = load_valid_password_reset_token(token)
+
+    if token_data is None:
+        return False
+
+    db = SessionLocal()
+
+    try:
+        user = db.query(User).filter(User.id == token_data["user_id"]).first()
+        reset_token = db.query(PasswordResetToken).filter(PasswordResetToken.id == token_data["id"]).first()
+
+        if user is None or reset_token is None or reset_token.used_at is not None:
+            return False
+
+        user.password_hash = hash_password(password)
+        reset_token.used_at = app_now()
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def send_password_reset_email(email, reset_url):
+    smtp_host = (os.getenv("SMTP_HOST") or "").strip()
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_username = (os.getenv("SMTP_USERNAME") or "").strip()
+    smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip()
+    smtp_from = (os.getenv("SMTP_FROM") or os.getenv("EMAIL_FROM") or smtp_username or "").strip()
+
+    if not smtp_host or not smtp_from:
+        return False
+
+    message = EmailMessage()
+    message["Subject"] = "Study PAS パスワード再設定"
+    message["From"] = smtp_from
+    message["To"] = email
+    message.set_content(
+        "Study PASのパスワード再設定リンクです。\n\n"
+        f"{reset_url}\n\n"
+        "このリンクは45分で使えなくなります。心当たりがない場合は、このメールを無視してください。"
+    )
+
+    try:
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=12) as smtp:
+            smtp.starttls()
+
+            if smtp_username and smtp_password:
+                smtp.login(smtp_username, smtp_password)
+
+            smtp.send_message(message)
+        return True
+    except Exception:
+        return False
 
 
 def load_user(user_id):
@@ -1539,7 +1713,7 @@ ROADMAP_TEMPLATES = {
 
 
 def normalize_roadmap_status(status):
-    return status if status in ["learned", "learning", "review", "not_started"] else "not_started"
+    return status if status in ROADMAP_STATUSES else "not_started"
 
 
 def infer_roadmap_status(title, textbooks, understandings):
@@ -1567,6 +1741,83 @@ def infer_roadmap_status(title, textbooks, understandings):
             return "learning"
 
     return "not_started"
+
+
+def get_roadmap_status_label(status):
+    return ROADMAP_STATUS_LABELS.get(normalize_roadmap_status(status), "未学習")
+
+
+def is_roadmap_follow_message(message):
+    return contains_any_word(message, ROADMAP_FOLLOW_WORDS)
+
+
+def is_roadmap_skip_message(message):
+    return contains_any_word(message, ROADMAP_SKIP_WORDS)
+
+
+def choose_roadmap_focus_item(roadmap_items):
+    for status in ["learning", "review"]:
+        for item in roadmap_items:
+            if normalize_roadmap_status(item.status) == status:
+                return item
+
+    for item in roadmap_items:
+        if normalize_roadmap_status(item.status) == "not_started":
+            return item
+
+    return roadmap_items[0] if roadmap_items else None
+
+
+def find_roadmap_item_from_message(roadmap_items, message):
+    message_text = (message or "").lower()
+
+    for item in roadmap_items:
+        title = (item.title or "").strip().lower()
+
+        if title and title in message_text:
+            return item
+
+    return choose_roadmap_focus_item(roadmap_items)
+
+
+def apply_roadmap_message_intent(db, roadmap_items, message):
+    intent = {
+        "type": "",
+        "item_title": ""
+    }
+
+    if not roadmap_items:
+        return intent
+
+    if is_roadmap_skip_message(message):
+        item = find_roadmap_item_from_message(roadmap_items, message)
+
+        if item is not None:
+            item.status = "skipped"
+            item.reason = "ユーザーがこの単元を飛ばすと決めたため、以後は必要な前提だけ補足します。"
+            item.updated_at = app_now()
+            db.commit()
+            intent = {
+                "type": "skip",
+                "item_title": item.title
+            }
+
+    elif is_roadmap_follow_message(message):
+        item = choose_roadmap_focus_item(roadmap_items)
+
+        if item is not None and normalize_roadmap_status(item.status) == "not_started":
+            item.status = "learning"
+            item.reason = "ユーザーがロードマップ通りに進むと決めたため、現在の授業位置として開始します。"
+            item.updated_at = app_now()
+            db.commit()
+
+        if item is not None:
+            intent = {
+                "type": "follow",
+                "item_title": item.title
+            }
+
+    return intent
 
 
 def fallback_roadmap_items(subject, textbooks, understandings):
@@ -1614,7 +1865,7 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
 ルール:
 - 6〜10個の単元にする。
 - 順番はおすすめだが、強制しない。
-- status は learned / learning / review / not_started のどれか。
+- status は learned / learning / review / not_started / skipped のどれか。
 - 既に教科書や理解度がある内容は反映する。
 - 前提知識を飛ばしそうな場合は reason でやさしく説明する。
 - 必ずJSONだけで返す。
@@ -1837,6 +2088,140 @@ def load_roadmap_overview(user_id):
             })
 
         return roadmaps
+    finally:
+        db.close()
+
+
+def format_roadmap_items_for_prompt(roadmap_items):
+    if not roadmap_items:
+        return "ロードマップはまだありません。必要ならこの科目の基礎から作って進めてください。"
+
+    lines = []
+
+    for index, item in enumerate(roadmap_items[:12], start=1):
+        lines.append(
+            f"{index}. [{get_roadmap_status_label(item.status)}] {item.title}"
+            f" - {item.reason or '理由は未登録'}"
+        )
+
+    current_item = choose_roadmap_focus_item(roadmap_items)
+    skipped_items = [
+        item.title
+        for item in roadmap_items
+        if normalize_roadmap_status(item.status) == "skipped"
+    ]
+
+    text_value = "\n".join(lines)
+    text_value += f"\n現在地: {current_item.title if current_item else '未設定'}"
+    text_value += f"\n飛ばした単元: {', '.join(skipped_items) if skipped_items else 'なし'}"
+
+    return text_value
+
+
+def format_textbooks_for_prompt(textbooks):
+    if not textbooks:
+        return "この科目の教科書はまだありません。授業内容から必要に応じて作成できます。"
+
+    lines = []
+
+    for textbook in textbooks[:5]:
+        lines.append(
+            f"- {textbook.title or '無題の教科書'}"
+            f" / 重要ポイント: {truncate_text(textbook.key_points or textbook.personal_points or '', 120)}"
+        )
+
+    return "\n".join(lines)
+
+
+def format_understandings_for_prompt(understandings):
+    if not understandings:
+        return "理解度データはまだありません。会話と回答から少しずつ推定してください。"
+
+    lines = []
+
+    for item in understandings[:12]:
+        label = item.item_name or item.scope_type or "項目"
+        lines.append(
+            f"- {label}: {normalize_percent(item.percent)}%"
+            f" / 前回差分 {item.delta_percent or 0}%"
+            f" / 根拠: {truncate_text(item.evidence or '', 100)}"
+        )
+
+    return "\n".join(lines)
+
+
+def build_study_context_for_prompt(thread, user_id, latest_message=""):
+    subject = normalize_subject_title(thread.title) or "学習相談"
+    db = SessionLocal()
+
+    try:
+        textbooks = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.user_id == user_id)
+            .filter(StudyTextbook.subject == subject)
+            .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+            .all()
+        )
+        understandings = (
+            db.query(StudyUnderstanding)
+            .filter(StudyUnderstanding.user_id == user_id)
+            .filter(StudyUnderstanding.subject == subject)
+            .order_by(StudyUnderstanding.updated_at.desc())
+            .all()
+        )
+
+        load_or_create_roadmap(db, user_id, subject, textbooks, understandings)
+        roadmap_items = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == user_id)
+            .filter(StudyRoadmapItem.subject == subject)
+            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+            .all()
+        )
+        roadmap_intent = apply_roadmap_message_intent(db, roadmap_items, latest_message)
+        roadmap_items = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == user_id)
+            .filter(StudyRoadmapItem.subject == subject)
+            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+            .all()
+        )
+
+        intent_text = "今回のロードマップ指示: なし"
+
+        if roadmap_intent["type"] == "follow":
+            intent_text = (
+                "今回のロードマップ指示: ユーザーはロードマップ通りに進むと言っています。"
+                f"現在地「{roadmap_intent['item_title']}」から授業を始めてください。"
+            )
+        elif roadmap_intent["type"] == "skip":
+            intent_text = (
+                "今回のロードマップ指示: ユーザーは"
+                f"「{roadmap_intent['item_title']}」を飛ばすと言っています。"
+                "今後は飛ばした単元として扱い、必要な前提だけ短く補足してください。"
+            )
+
+        return f"""
+学習基本情報:
+{format_study_context_for_prompt(thread)}
+
+ロードマップ:
+{format_roadmap_items_for_prompt(roadmap_items)}
+
+{intent_text}
+
+教科書:
+{format_textbooks_for_prompt(textbooks)}
+
+理解度:
+{format_understandings_for_prompt(understandings)}
+
+ロードマップ利用ルール:
+- 返答前に、必ず上のロードマップ・現在地・飛ばした単元・理解度を確認してください。
+- 「ロードマップ通りに進もう」と言われたら、現在地または次の未学習単元から授業を始めてください。
+- 「ここは飛ばす」と言われたら、その単元を飛ばした前提で進め、必要な前提知識だけ短く補ってください。
+- 順番は強制せず、ユーザーが選んだ単元を尊重してください。
+"""
     finally:
         db.close()
 
@@ -4348,7 +4733,7 @@ def serialize_thread(thread):
     return thread_data
 
 
-def process_chat_message(thread, user_id, clean_message):
+def prepare_ai_response_context(thread, user_id, clean_message):
     is_study_thread = thread.thread_type == STUDY_THREAD_TYPE
     history = load_messages(thread.id, user_id)
     memories = load_memories(user_id)
@@ -4413,26 +4798,46 @@ def process_chat_message(thread, user_id, clean_message):
             user_id=user_id
         )
 
+    study_context_text = (
+        build_study_context_for_prompt(thread, user_id, clean_message)
+        if is_study_thread
+        else ""
+    )
+    prompt = build_ai_prompt(
+        clean_message,
+        history,
+        memories,
+        timeline_text,
+        calendar_text,
+        profile_text,
+        goals_text,
+        persona,
+        response_length,
+        thread.title,
+        thread.thread_type,
+        study_context_text
+    )
+
+    return {
+        "thread": thread,
+        "history": history,
+        "prompt": prompt,
+        "is_study_thread": is_study_thread
+    }
+
+
+def process_chat_message(thread, user_id, clean_message):
+    context = prepare_ai_response_context(thread, user_id, clean_message)
+    thread = context["thread"]
+    history = context["history"]
+    is_study_thread = context["is_study_thread"]
     ai_message = ""
     should_save_ai_message = True
 
     try:
         response = client.responses.create(
             model="gpt-4.1-mini",
-            input=build_ai_prompt(
-                clean_message,
-                history,
-                memories,
-                timeline_text,
-                calendar_text,
-                profile_text,
-                goals_text,
-                persona,
-                response_length,
-                thread.title,
-                thread.thread_type,
-                format_study_context_for_prompt(thread) if is_study_thread else ""
-            )
+            input=context["prompt"]
         )
 
         ai_message = response.output_text
@@ -4464,6 +4869,76 @@ def process_chat_message(thread, user_id, clean_message):
     return chat_items
 
 
+def sse_event(event_name, data):
+    return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def extract_stream_delta(event):
+    event_type = getattr(event, "type", "")
+
+    if event_type == "response.output_text.delta":
+        return getattr(event, "delta", "") or ""
+
+    if event_type.endswith(".delta"):
+        delta = getattr(event, "delta", "")
+
+        if isinstance(delta, str):
+            return delta
+
+    return ""
+
+
+def stream_chat_message_events(thread, user_id, clean_message):
+    context = prepare_ai_response_context(thread, user_id, clean_message)
+    thread = context["thread"]
+    history = context["history"]
+    is_study_thread = context["is_study_thread"]
+    ai_parts = []
+    saved = False
+
+    try:
+        yield sse_event("ready", {"ok": True})
+
+        with client.responses.stream(
+            model="gpt-4.1-mini",
+            input=context["prompt"]
+        ) as stream:
+            for event in stream:
+                delta = extract_stream_delta(event)
+
+                if not delta:
+                    continue
+
+                ai_parts.append(delta)
+                yield sse_event("delta", {"text": delta})
+    except GeneratorExit:
+        raise
+    except Exception:
+        if not ai_parts:
+            yield sse_event(
+                "error",
+                {"message": "PASの回答を生成できませんでした。もう一度送信してください。"}
+            )
+        return
+    finally:
+        ai_message = "".join(ai_parts).strip()
+
+        if ai_message and not saved:
+            save_message("assistant", ai_message, thread.id, user_id)
+            saved = True
+
+            if is_study_thread:
+                save_study_learning_notes(
+                    thread=thread,
+                    user_id=user_id,
+                    user_message=clean_message,
+                    teacher_message=ai_message,
+                    history=history
+                )
+
+    yield sse_event("done", {"ok": True})
+
+
 def process_study_image_message(thread, user_id, clean_message, image_bytes, content_type):
     is_study_thread = thread.thread_type == STUDY_THREAD_TYPE
     prompt_message = clean_message or "この画像の内容を読み取って、分かりやすく授業してください。"
@@ -4479,7 +4954,7 @@ def process_study_image_message(thread, user_id, clean_message, image_bytes, con
     history = load_messages(thread.id, user_id)
     memories = load_memories(user_id)
     timeline_text = format_timeline_for_prompt(load_timeline_items(user_id))
-    study_context_text = format_study_context_for_prompt(thread) if is_study_thread else ""
+    study_context_text = build_study_context_for_prompt(thread, user_id, prompt_message) if is_study_thread else ""
     encoded_image = base64.b64encode(image_bytes).decode("utf-8")
     image_url = f"data:{content_type};base64,{encoded_image}"
 
@@ -4663,6 +5138,114 @@ def login_action(
     return RedirectResponse(url="/", status_code=303)
 
 
+@app.get("/forgot-password")
+def forgot_password_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="forgot_password.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "",
+            "message": "",
+            "reset_url": "",
+            "email": ""
+        }
+    )
+
+
+@app.post("/forgot-password")
+def forgot_password_action(request: Request, email: str = Form("")):
+    clean_email = normalize_email(email)
+    token = create_password_reset_token(clean_email)
+    reset_url = ""
+    email_sent = False
+
+    if token:
+        reset_url = f"{build_base_url(request)}/reset-password?token={token}"
+        email_sent = send_password_reset_email(clean_email, reset_url)
+
+    message = "入力されたメールアドレスに再設定リンクを送信しました。"
+
+    if token and not email_sent:
+        message = "メール送信設定が未設定のため、開発用の再設定リンクを表示しています。"
+
+    return templates.TemplateResponse(
+        request=request,
+        name="forgot_password.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "",
+            "message": message,
+            "reset_url": reset_url if token and not email_sent else "",
+            "email": clean_email
+        }
+    )
+
+
+@app.get("/reset-password")
+def reset_password_page(request: Request, token: str = ""):
+    token_data = load_valid_password_reset_token(token)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="reset_password.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "" if token_data else "この再設定リンクは無効、または期限切れです。",
+            "message": "",
+            "token": token if token_data else "",
+            "email": token_data["email"] if token_data else ""
+        }
+    )
+
+
+@app.post("/reset-password")
+def reset_password_action(
+    request: Request,
+    token: str = Form(""),
+    password: str = Form("")
+):
+    token_data = load_valid_password_reset_token(token)
+
+    if token_data is None:
+        return templates.TemplateResponse(
+            request=request,
+            name="reset_password.html",
+            context={
+                "settings": {"theme_name": "calm"},
+                "error": "この再設定リンクは無効、または期限切れです。",
+                "message": "",
+                "token": "",
+                "email": ""
+            }
+        )
+
+    if not reset_user_password(token, password):
+        return templates.TemplateResponse(
+            request=request,
+            name="reset_password.html",
+            context={
+                "settings": {"theme_name": "calm"},
+                "error": f"パスワードは{PASSWORD_MIN_LENGTH}文字以上にしてください。",
+                "message": "",
+                "token": token,
+                "email": token_data["email"]
+            }
+        )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="reset_password.html",
+        context={
+            "settings": {"theme_name": "calm"},
+            "error": "",
+            "message": "パスワードを変更しました。ログインできます。",
+            "token": "",
+            "email": token_data["email"]
+        }
+    )
+
+
 @app.post("/logout")
 def logout_action(request: Request):
     request.session.clear()
@@ -4802,6 +5385,32 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
         "thread": serialize_thread(thread),
         "messages": serialize_chat_items(chat_items)
     }
+
+
+@app.post("/api/chat/{thread_id}/messages/stream")
+def api_chat_message_stream(request: Request, thread_id: int, payload: ChatMessageCreatePayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    thread = load_chat_thread(thread_id, current_user.id)
+
+    if thread is None:
+        return JSONResponse({"error": "thread_not_found"}, status_code=404)
+
+    if thread.thread_type != STUDY_THREAD_TYPE:
+        return JSONResponse({"error": "study_thread_required"}, status_code=400)
+
+    clean_message = payload.message.strip()
+
+    if not clean_message:
+        return JSONResponse({"error": "message_required"}, status_code=400)
+
+    return StreamingResponse(
+        stream_chat_message_events(thread, current_user.id, clean_message),
+        media_type="text/event-stream"
+    )
 
 
 @app.post("/api/chat/{thread_id}/image")

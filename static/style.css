@@ -722,7 +722,7 @@ body:has(.study-app) {
 
 .study-chat-form {
     display: flex;
-    align-items: center;
+    align-items: flex-end;
     gap: 8px;
     width: 100%;
     padding: 8px;
@@ -734,18 +734,32 @@ body:has(.study-app) {
     box-sizing: border-box;
 }
 
-.study-chat-form input[type="text"] {
+.study-chat-form textarea {
     flex: 1;
     min-width: 0;
-    height: 48px;
-    padding: 0 14px;
+    min-height: 48px;
+    max-height: 136px;
+    padding: 13px 14px;
     border: 0;
     border-radius: 18px;
     background: transparent;
     color: var(--study-text);
     font: inherit;
     font-size: 16px;
+    line-height: 1.45;
     outline: none;
+    resize: none;
+    overflow-y: auto;
+    box-sizing: border-box;
+}
+
+.study-chat-form textarea::placeholder {
+    color: rgba(21, 23, 25, 0.42);
+}
+
+.study-chat-form .stop-button {
+    background: #2f3338;
+    color: #ffffff;
 }
 
 .image-picker {
@@ -1754,7 +1768,12 @@ body:has(.study-app) {
         height: 44px;
     }
 
-    .study-chat-form input[type="text"],
+    .study-chat-form textarea {
+        min-height: 44px;
+        max-height: 112px;
+        padding: 11px 12px;
+    }
+
     .study-chat-form button {
         height: 44px;
     }
@@ -2647,6 +2666,41 @@ body {
     border-radius: 8px;
     background: rgba(220, 38, 38, 0.08);
     color: #b91c1c;
+}
+
+.form-success {
+    padding: 12px 14px;
+    border: 1px solid rgba(34, 197, 94, 0.24);
+    border-radius: 8px;
+    background: rgba(34, 197, 94, 0.1);
+    color: #166534;
+}
+
+.dev-reset-link {
+    display: grid;
+    gap: 8px;
+    margin-top: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--field-border);
+    border-radius: 10px;
+    background: var(--field-bg);
+    overflow-wrap: anywhere;
+}
+
+.dev-reset-link span {
+    color: var(--muted);
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.dev-reset-link a {
+    color: var(--text);
+    font-weight: 700;
+}
+
+.subtle-auth-link {
+    margin-top: 14px;
+    font-size: 14px;
 }
 
 .auth-switch {

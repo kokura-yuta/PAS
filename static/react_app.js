@@ -29,6 +29,88 @@
         return response.json();
     }
 
+    function parseSseBlock(block) {
+        const lines = block.split("\n");
+        let eventName = "message";
+        const dataLines = [];
+
+        lines.forEach(function (line) {
+            if (line.startsWith("event:")) {
+                eventName = line.slice(6).trim();
+            } else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trimStart());
+            }
+        });
+
+        return {
+            event: eventName,
+            data: dataLines.join("\n")
+        };
+    }
+
+    async function streamApi(path, options, onEvent) {
+        const response = await fetch(path, {
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            ...(options || {})
+        });
+
+        if (response.status === 401) {
+            window.location.href = "/login";
+            return;
+        }
+
+        if (!response.ok || !response.body) {
+            throw new Error("request_failed");
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+            const result = await reader.read();
+
+            if (result.done) {
+                break;
+            }
+
+            buffer += decoder.decode(result.value, { stream: true });
+            const blocks = buffer.split("\n\n");
+            buffer = blocks.pop() || "";
+
+            blocks.forEach(function (block) {
+                if (!block.trim()) {
+                    return;
+                }
+
+                const parsed = parseSseBlock(block);
+                let data = {};
+
+                try {
+                    data = parsed.data ? JSON.parse(parsed.data) : {};
+                } catch (err) {
+                    data = {};
+                }
+
+                onEvent(parsed.event, data);
+            });
+        }
+
+        if (buffer.trim()) {
+            const parsed = parseSseBlock(buffer);
+            let data = {};
+
+            try {
+                data = parsed.data ? JSON.parse(parsed.data) : {};
+            } catch (err) {
+                data = {};
+            }
+
+            onEvent(parsed.event, data);
+        }
+    }
+
     function App() {
         const [route, setRoute] = useState(window.location.pathname);
         const [screenState, setScreenState] = useState("entered");
@@ -1296,6 +1378,8 @@
         const [previewingTextbook, setPreviewingTextbook] = useState(false);
         const [savingTextbook, setSavingTextbook] = useState(false);
         const fileInputRef = useRef(null);
+        const abortControllerRef = useRef(null);
+        const streamingAssistantRef = useRef("");
 
         const threadIdMatch = route.match(/^\/chat\/(\d+)/);
         const threadId = threadIdMatch ? threadIdMatch[1] : null;
@@ -1322,6 +1406,10 @@
 
             return function () {
                 active = false;
+                if (abortControllerRef.current) {
+                    abortControllerRef.current.abort();
+                    abortControllerRef.current = null;
+                }
             };
         }, [apiPath]);
 
@@ -1331,37 +1419,94 @@
             });
         }, [chatData, sending]);
 
+        function updateStreamingAssistant(tempId, content) {
+            setChatData(function (current) {
+                if (!current) {
+                    return current;
+                }
+
+                return {
+                    ...current,
+                    messages: current.messages.map(function (item) {
+                        return item.temp_id === tempId
+                            ? { ...item, content: content }
+                            : item;
+                    })
+                };
+            });
+        }
+
+        async function syncChatAfterStream() {
+            if (!chatData) {
+                return;
+            }
+
+            try {
+                const data = await api(`/api/chat/${chatData.thread.id}`);
+
+                if (data) {
+                    setChatData(data);
+                }
+            } catch (err) {
+                // 途中停止直後は保存が少し遅れることがあるため、画面上の途中回答を優先する。
+            }
+        }
+
         async function postTextMessage(cleanMessage, displayMessage) {
             if (!cleanMessage || !chatData || sending) {
                 return;
             }
 
+            const controller = new AbortController();
+            const tempId = `stream-${Date.now()}`;
+            abortControllerRef.current = controller;
+            streamingAssistantRef.current = "";
             setSending(true);
             setSendingLabel("先生が考えています");
             setError("");
             setChatData({
                 ...chatData,
                 messages: chatData.messages.concat([
-                    { role: "user", content: displayMessage || cleanMessage, created_at: "" }
+                    { role: "user", content: displayMessage || cleanMessage, created_at: "" },
+                    { role: "assistant", content: "", created_at: "", temp_id: tempId }
                 ])
             });
             setMessage("");
 
             try {
-                const data = await api(`/api/chat/${chatData.thread.id}/messages`, {
+                await streamApi(`/api/chat/${chatData.thread.id}/messages/stream`, {
                     method: "POST",
-                    body: JSON.stringify({ message: cleanMessage })
-                });
+                    body: JSON.stringify({ message: cleanMessage }),
+                    signal: controller.signal
+                }, function (eventName, data) {
+                    if (eventName === "delta" && data.text) {
+                        streamingAssistantRef.current += data.text;
+                        updateStreamingAssistant(tempId, streamingAssistantRef.current);
+                    }
 
-                if (data) {
-                    setChatData(data);
-                }
+                    if (eventName === "error" && data.message) {
+                        setError(data.message);
+                    }
+                });
             } catch (err) {
-                setError("送信できませんでした。もう一度試してください。");
+                if (err.name !== "AbortError") {
+                    setError("送信できませんでした。もう一度試してください。");
+                }
             } finally {
+                abortControllerRef.current = null;
                 setSending(false);
                 setSendingLabel("");
+                window.setTimeout(syncChatAfterStream, 180);
             }
+        }
+
+        function stopGenerating() {
+            if (!abortControllerRef.current) {
+                return;
+            }
+
+            setSendingLabel("停止しています");
+            abortControllerRef.current.abort();
         }
 
         async function sendMessage(event) {
@@ -1378,6 +1523,8 @@
                 return;
             }
 
+            const controller = new AbortController();
+            abortControllerRef.current = controller;
             setSending(true);
             setSendingLabel("画像を読み取っています");
             setError("");
@@ -1400,12 +1547,14 @@
                     formData.append("image", file);
                     data = await api(`/api/chat/${chatData.thread.id}/image`, {
                         method: "POST",
-                        body: formData
+                        body: formData,
+                        signal: controller.signal
                     });
                 } else {
                     data = await api(`/api/chat/${chatData.thread.id}/messages`, {
                         method: "POST",
-                        body: JSON.stringify({ message: cleanMessage })
+                        body: JSON.stringify({ message: cleanMessage }),
+                        signal: controller.signal
                     });
                 }
 
@@ -1418,8 +1567,11 @@
                     fileInputRef.current.value = "";
                 }
             } catch (err) {
-                setError("送信できませんでした。もう一度試してください。");
+                if (err.name !== "AbortError") {
+                    setError("送信できませんでした。もう一度試してください。");
+                }
             } finally {
+                abortControllerRef.current = null;
                 setSending(false);
                 setSendingLabel("");
             }
@@ -1427,6 +1579,18 @@
 
         function sendLessonAction(action) {
             postTextMessage(action.message, action.label);
+        }
+
+        function handleMessageKeyDown(event) {
+            if (event.key !== "Enter" || !(event.metaKey || event.ctrlKey)) {
+                return;
+            }
+
+            event.preventDefault();
+
+            if (event.currentTarget.form && typeof event.currentTarget.form.requestSubmit === "function") {
+                event.currentTarget.form.requestSubmit();
+            }
         }
 
         async function createTextbookPreview() {
@@ -1596,13 +1760,14 @@
                     ? h("div", { className: "study-message teacher-message" }, h("p", null, "読み込み中"))
                     : messages.length
                         ? messages.map(function (chat, index) {
+                            const isStreamingPlaceholder = chat.temp_id && !chat.content;
                             return h(
                                 "div",
                                 {
                                     key: index,
-                                    className: `study-message ${chat.role === "user" ? "student-message" : "teacher-message"}`
+                                    className: `study-message ${chat.role === "user" ? "student-message" : "teacher-message"}${isStreamingPlaceholder ? " thinking-message" : ""}`
                                 },
-                                h("p", null, chat.content)
+                                h("p", null, chat.content || (isStreamingPlaceholder ? "先生が考えています" : ""))
                             );
                         })
                         : h(
@@ -1750,22 +1915,33 @@
                             disabled: sending || !chatData
                         })
                     ),
-                    h("input", {
-                        type: "text",
+                    h("textarea", {
                         name: "message",
                         placeholder: file ? "画像について聞きたいこと" : "分からないところを聞く",
                         autoComplete: "off",
+                        rows: 1,
                         value: message,
+                        onKeyDown: handleMessageKeyDown,
                         onChange: function (event) {
                             setMessage(event.target.value);
                         },
                         disabled: sending || !chatData
                     }),
-                    h(
-                        "button",
-                        { type: "submit", disabled: sending || !chatData || (!message.trim() && !file) },
-                        sending ? h(LoadingLabel, { text: "送信中" }) : "送信"
-                    )
+                    sending
+                        ? h(
+                            "button",
+                            {
+                                type: "button",
+                                className: "stop-button",
+                                onClick: stopGenerating
+                            },
+                            sendingLabel === "停止しています" ? h(LoadingLabel, { text: "停止中" }) : "停止"
+                        )
+                        : h(
+                            "button",
+                            { type: "submit", disabled: !chatData || (!message.trim() && !file) },
+                            "送信"
+                        )
                 )
             )
         );
