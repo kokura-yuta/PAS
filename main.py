@@ -1954,26 +1954,50 @@ def is_roadmap_create_message(message):
     return has_roadmap_word and contains_any_word(text_value, ROADMAP_CREATE_WORDS)
 
 
+def clean_roadmap_goal_text(message):
+    text_value = (message or "").strip()
+
+    cleaned = text_value
+    for word in ROADMAP_CREATE_WORDS + ["ロードマップ", "学習計画", "順番", "考えて", "この目標までの"]:
+        cleaned = cleaned.replace(word, "")
+
+    return cleaned.replace("を", "").replace("の", "").replace("。", "").replace("、", "").strip()
+
+
 def has_roadmap_goal_detail(message):
     text_value = (message or "").strip()
 
     if contains_any_word(text_value, ROADMAP_GOAL_DETAIL_WORDS):
         return True
 
-    cleaned = text_value
-    for word in ROADMAP_CREATE_WORDS + ["ロードマップ", "学習計画", "順番", "考えて", "この目標までの"]:
-        cleaned = cleaned.replace(word, "")
-
-    cleaned = cleaned.replace("を", "").replace("の", "").replace("。", "").replace("、", "").strip()
+    cleaned = clean_roadmap_goal_text(text_value)
     return len(cleaned) >= 8
 
 
-def should_create_roadmap_from_message(message):
-    return is_roadmap_create_message(message) and has_roadmap_goal_detail(message)
+def subject_can_be_roadmap_goal(subject):
+    clean_subject = normalize_subject_title(subject) or ""
+    return clean_subject not in ["", "学習相談", "新しい学習", "Study PAS"]
 
 
-def should_ask_roadmap_goal_question(message):
-    return is_roadmap_create_message(message) and not has_roadmap_goal_detail(message)
+def should_create_roadmap_from_message(message, subject=""):
+    if not is_roadmap_create_message(message):
+        return False
+
+    return has_roadmap_goal_detail(message) or subject_can_be_roadmap_goal(subject)
+
+
+def should_ask_roadmap_goal_question(message, subject=""):
+    return is_roadmap_create_message(message) and not should_create_roadmap_from_message(message, subject)
+
+
+def extract_roadmap_goal_text(message, subject):
+    cleaned = clean_roadmap_goal_text(message)
+
+    if cleaned and len(cleaned) >= 4:
+        return cleaned
+
+    clean_subject = normalize_subject_title(subject) or "学習"
+    return f"{clean_subject}を基礎から順番に理解し、自分で使えるようになる"
 
 
 def extract_roadmap_addition_title(message):
@@ -2329,11 +2353,12 @@ def load_or_create_roadmap(
         if not allow_create:
             return []
 
-        roadmap_plan = generate_roadmap_plan_with_ai(subject, textbooks, understandings, goal_text)
+        roadmap_goal_text = extract_roadmap_goal_text(goal_text, subject)
+        roadmap_plan = generate_roadmap_plan_with_ai(subject, textbooks, understandings, roadmap_goal_text)
         source_type = "ai"
 
         if not roadmap_plan:
-            roadmap_plan = fallback_roadmap_plan(subject, textbooks, understandings, goal_text)
+            roadmap_plan = fallback_roadmap_plan(subject, textbooks, understandings, roadmap_goal_text)
             source_type = "fallback"
 
         roadmap_title = roadmap_plan["roadmap_title"]
@@ -2640,6 +2665,7 @@ def load_roadmap_overview(user_id):
 
         chat_urls = {}
         thread_ids = {}
+        thread_subjects = {}
         valid_thread_ids = set()
 
         for thread in study_threads:
@@ -2647,7 +2673,33 @@ def load_roadmap_overview(user_id):
             subject_names.add(subject)
             chat_urls.setdefault(subject, f"/chat/{thread.id}")
             thread_ids.setdefault(subject, thread.id)
+            thread_subjects[thread.id] = subject
             valid_thread_ids.add(thread.id)
+
+        latest_roadmap_requests = {}
+
+        if valid_thread_ids:
+            recent_user_messages = (
+                db.query(ChatMessage)
+                .filter(ChatMessage.user_id == user_id)
+                .filter(ChatMessage.thread_id.in_(valid_thread_ids))
+                .filter(ChatMessage.role == "user")
+                .order_by(ChatMessage.created_at.desc().nullslast(), ChatMessage.id.desc())
+                .limit(120)
+                .all()
+            )
+
+            for message in recent_user_messages:
+                subject = thread_subjects.get(message.thread_id)
+
+                if not subject or subject in latest_roadmap_requests:
+                    continue
+
+                if should_create_roadmap_from_message(message.content, subject):
+                    latest_roadmap_requests[subject] = {
+                        "content": message.content or "",
+                        "thread_id": message.thread_id
+                    }
 
         textbooks = (
             db.query(StudyTextbook)
@@ -2690,14 +2742,20 @@ def load_roadmap_overview(user_id):
                 .order_by(StudyUnderstanding.updated_at.desc())
                 .all()
             )
-            roadmap_thread_id = roadmap_thread_ids.get(subject, thread_ids.get(subject))
+            latest_request = latest_roadmap_requests.get(subject, {})
+            roadmap_thread_id = roadmap_thread_ids.get(
+                subject,
+                latest_request.get("thread_id", thread_ids.get(subject))
+            )
             roadmap_items = load_or_create_roadmap(
                 db,
                 user_id,
                 subject,
                 subject_textbooks,
                 understandings,
-                roadmap_thread_id
+                roadmap_thread_id,
+                allow_create=bool(latest_request),
+                goal_text=latest_request.get("content", "")
             )
 
             if not roadmap_items:
@@ -3043,8 +3101,8 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
         roadmap_deleted = is_roadmap_deleted(db, user_id, subject, thread.id)
         roadmap_intent = {"type": "", "item_title": ""}
         roadmap_create_requested = is_roadmap_create_message(latest_message)
-        roadmap_create_allowed = should_create_roadmap_from_message(latest_message)
-        roadmap_needs_goal = should_ask_roadmap_goal_question(latest_message)
+        roadmap_create_allowed = should_create_roadmap_from_message(latest_message, subject)
+        roadmap_needs_goal = should_ask_roadmap_goal_question(latest_message, subject)
         roadmap_created = False
 
         if roadmap_deleted and roadmap_create_allowed:
