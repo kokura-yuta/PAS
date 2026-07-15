@@ -111,6 +111,20 @@
         }
     }
 
+    const THINKING_LABELS = [
+        "先生が前回の内容を確認しています",
+        "理解度を見ています",
+        "ロードマップを確認しています",
+        "教科書に残す内容を整理しています"
+    ];
+
+    const IMAGE_THINKING_LABELS = [
+        "画像を読み取っています",
+        "問題の内容を整理しています",
+        "理解度と教科書を確認しています",
+        "授業の進め方を準備しています"
+    ];
+
     function App() {
         const [route, setRoute] = useState(window.location.pathname);
         const [screenState, setScreenState] = useState("entered");
@@ -688,39 +702,78 @@
                             return h(
                                 "article",
                                 { key: `${subject.subject}-${subject.thread_id || "global"}`, className: "roadmap-subject-card" },
-                                h(
-                                    "div",
-                                    { className: "roadmap-subject-head" },
-                                    h(
-                                        "div",
+                                (function () {
+                                    const total = subject.total_count || (subject.items ? subject.items.length : 0);
+                                    const completed = subject.completed_count || 0;
+                                    const progress = total ? Math.round((completed / total) * 100) : (subject.understanding_percent || 0);
+                                    const currentTitle = subject.current_item ? subject.current_item.title : "まだ未設定";
+                                    const nextTitle = subject.next_item ? subject.next_item.title : "先生と相談して決める";
+
+                                    return h(
+                                        React.Fragment,
                                         null,
-                                        h("p", { className: "section-kicker" }, "教材ロードマップ"),
-                                        h("h2", null, subject.roadmap_title || subject.subject),
-                                        h("small", null, subject.subject)
-                                    ),
-                                    h(
-                                        "button",
-                                        {
-                                            type: "button",
-                                            onClick: function () {
-                                                openSubjectLesson(subject);
-                                            }
-                                        },
-                                        "授業へ"
-                                    ),
-                                    h(
-                                        "button",
-                                        {
-                                            type: "button",
-                                            className: "roadmap-delete-button",
-                                            disabled: deletingKey === subject.subject,
-                                            onClick: function () {
-                                                deleteRoadmap(subject);
-                                            }
-                                        },
-                                        deletingKey === subject.subject ? h(LoadingLabel, { text: "削除中" }) : "削除"
-                                    )
-                                ),
+                                        h(
+                                            "div",
+                                            { className: "roadmap-subject-head" },
+                                            h(
+                                                "div",
+                                                null,
+                                                h("p", { className: "section-kicker" }, "教材ロードマップ"),
+                                                h("h2", null, subject.roadmap_title || subject.subject),
+                                                h("small", null, subject.subject)
+                                            ),
+                                            h(
+                                                "button",
+                                                {
+                                                    type: "button",
+                                                    onClick: function () {
+                                                        openSubjectLesson(subject);
+                                                    }
+                                                },
+                                                "授業へ"
+                                            ),
+                                            h(
+                                                "button",
+                                                {
+                                                    type: "button",
+                                                    className: "roadmap-delete-button",
+                                                    disabled: deletingKey === subject.subject,
+                                                    onClick: function () {
+                                                        deleteRoadmap(subject);
+                                                    }
+                                                },
+                                                deletingKey === subject.subject ? h(LoadingLabel, { text: "削除中" }) : "削除"
+                                            )
+                                        ),
+                                        h(
+                                            "section",
+                                            { className: "roadmap-current-panel" },
+                                            h("p", { className: "section-kicker" }, "現在地"),
+                                            h("h3", null, currentTitle),
+                                            h(
+                                                "div",
+                                                { className: "roadmap-current-grid" },
+                                                h(
+                                                    "span",
+                                                    null,
+                                                    h("small", null, "次におすすめ"),
+                                                    h("strong", null, nextTitle)
+                                                ),
+                                                h(
+                                                    "span",
+                                                    null,
+                                                    h("small", null, "進捗"),
+                                                    h("strong", null, `${progress}%`)
+                                                )
+                                            ),
+                                            h(
+                                                "div",
+                                                { className: "roadmap-progress-track", "aria-label": `進捗 ${progress}%` },
+                                                h("i", { style: { width: `${Math.min(100, Math.max(0, progress))}%` } })
+                                            )
+                                        )
+                                    );
+                                })(),
                                 subject.goal
                                     ? h("p", { className: "roadmap-goal-text" }, `目標: ${subject.goal}`)
                                     : null,
@@ -1289,16 +1342,50 @@
                                     : "回答を提出すると、先生が次の復習タイミングを決めます。"
                             )
                     ),
+                    sections.length
+                        ? h(
+                            "nav",
+                            { className: "textbook-toc", "aria-label": "教科書の目次" },
+                            h("p", { className: "section-kicker" }, "目次"),
+                            h("h2", null, "この章で読むこと"),
+                            h(
+                                "div",
+                                { className: "textbook-toc-list" },
+                                sections.map(function (section, index) {
+                                    return h(
+                                        "button",
+                                        {
+                                            key: section.key,
+                                            type: "button",
+                                            onClick: function () {
+                                                const target = document.getElementById(`textbook-section-${section.key}`);
+                                                if (target) {
+                                                    target.scrollIntoView({ behavior: "smooth", block: "start" });
+                                                }
+                                            }
+                                        },
+                                        h("span", null, String(index + 1).padStart(2, "0")),
+                                        h("strong", null, section.label)
+                                    );
+                                })
+                            )
+                        )
+                        : null,
                     h(
                         "article",
                         { className: "textbook-reader" },
-                        sections.map(function (section) {
+                        sections.map(function (section, index) {
                             const blockSection = section.key === "code_example" || section.key === "visual_diagram";
 
                             return h(
                                 "section",
-                                { key: section.key, className: "textbook-section" },
-                                h("h2", null, section.label),
+                                { key: section.key, id: `textbook-section-${section.key}`, className: "textbook-section" },
+                                h(
+                                    "div",
+                                    { className: "textbook-chapter-heading" },
+                                    h("span", null, String(index + 1).padStart(2, "0")),
+                                    h("h2", null, section.label)
+                                ),
                                 blockSection
                                     ? h(
                                         "pre",
@@ -1445,6 +1532,7 @@
         const fileInputRef = useRef(null);
         const abortControllerRef = useRef(null);
         const streamingAssistantRef = useRef("");
+        const thinkingTimerRef = useRef(null);
 
         const threadIdMatch = route.match(/^\/chat\/(\d+)/);
         const threadId = threadIdMatch ? threadIdMatch[1] : null;
@@ -1475,6 +1563,7 @@
                     abortControllerRef.current.abort();
                     abortControllerRef.current = null;
                 }
+                stopThinkingLabels();
             };
         }, [apiPath]);
 
@@ -1499,6 +1588,26 @@
                     })
                 };
             });
+        }
+
+        function stopThinkingLabels() {
+            if (thinkingTimerRef.current) {
+                window.clearInterval(thinkingTimerRef.current);
+                thinkingTimerRef.current = null;
+            }
+        }
+
+        function startThinkingLabels(labels) {
+            let index = 0;
+            const safeLabels = labels && labels.length ? labels : THINKING_LABELS;
+
+            stopThinkingLabels();
+            setSendingLabel(safeLabels[index]);
+
+            thinkingTimerRef.current = window.setInterval(function () {
+                index = (index + 1) % safeLabels.length;
+                setSendingLabel(safeLabels[index]);
+            }, 1400);
         }
 
         async function syncChatAfterStream() {
@@ -1527,7 +1636,7 @@
             abortControllerRef.current = controller;
             streamingAssistantRef.current = "";
             setSending(true);
-            setSendingLabel("先生が考えています");
+            startThinkingLabels(THINKING_LABELS);
             setError("");
             setChatData({
                 ...chatData,
@@ -1559,6 +1668,7 @@
                 }
             } finally {
                 abortControllerRef.current = null;
+                stopThinkingLabels();
                 setSending(false);
                 setSendingLabel("");
                 window.setTimeout(syncChatAfterStream, 180);
@@ -1570,6 +1680,7 @@
                 return;
             }
 
+            stopThinkingLabels();
             setSendingLabel("停止しています");
             abortControllerRef.current.abort();
         }
@@ -1591,7 +1702,7 @@
             const controller = new AbortController();
             abortControllerRef.current = controller;
             setSending(true);
-            setSendingLabel("画像を読み取っています");
+            startThinkingLabels(IMAGE_THINKING_LABELS);
             setError("");
 
             const optimisticContent = file ? `[画像] ${cleanMessage || "この画像を解説して"}` : cleanMessage;
@@ -1637,6 +1748,7 @@
                 }
             } finally {
                 abortControllerRef.current = null;
+                stopThinkingLabels();
                 setSending(false);
                 setSendingLabel("");
             }
