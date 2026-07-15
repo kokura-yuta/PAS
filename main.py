@@ -3264,6 +3264,52 @@ def format_understandings_for_prompt(understandings):
     return "\n".join(lines)
 
 
+def infer_study_material_plan(subject, latest_message="", understanding_percent=0):
+    subject_text = f"{subject or ''} {latest_message or ''}"
+    lower_text = subject_text.lower()
+    percent = normalize_percent(understanding_percent)
+
+    if any(word in subject_text for word in ["英語", "英文", "英単語", "TOEIC"]) or "english" in lower_text:
+        base = [
+            "推奨教材: ネイティブ音声、単語問題、リスニング問題、発音練習、シャドーイング、ディクテーション。",
+            "音声は説明文すべてではなく、問題・単語問題・リスニング用英文に絞る。",
+            "理解度が高い時は、単語確認から会話文・長文・TOEIC形式へ進める。"
+        ]
+    elif any(word in subject_text for word in ["韓国語", "中国語", "日本語", "ハングル", "中文", "JLPT", "HSK"]):
+        base = [
+            "推奨教材: 音声、発音練習、短文リピート、シャドーイング、ディクテーション。",
+            "文字・単語・例文を分け、聞く→真似る→書くの順で扱う。",
+            "理解度が高い時は、単語から会話文・短い長文へ進める。"
+        ]
+    elif any(word in subject_text for word in ["数学", "算数", "関数", "図形", "微分", "積分", "確率", "方程式"]):
+        base = [
+            "推奨教材: 図、グラフ、数直線、表、途中式、考え方の流れ。",
+            "式だけで終わらせず、何がどう変化しているかを図で見せる。",
+            "理解度が高い時は、基本計算から文章題・証明・応用問題へ進める。"
+        ]
+    elif any(word in subject_text for word in ["Python", "Java", "JavaScript", "FastAPI", "SQL", "React", "プログラミング", "コード", "アプリ"]):
+        base = [
+            "推奨教材: フローチャート、コード図解、データの流れ、短い実装例、バグ修正問題。",
+            "コードだけを出さず、入力→処理→出力の流れを先に見せる。",
+            "理解度が高い時は、読解から修正、自作、ミニアプリ制作へ進める。"
+        ]
+    else:
+        base = [
+            "推奨教材: たとえ、図解、短い例、確認問題を内容に合わせて選ぶ。",
+            "文章説明だけで終わらせず、ユーザーが手を動かせる教材を1つ入れる。",
+            "理解度が高い時は、説明より応用・自分で説明する問題へ進める。"
+        ]
+
+    if percent >= 75:
+        base.append("現在の理解度は高めなので、基礎反復より実践・応用・自分で作る課題を優先する。")
+    elif percent <= 40:
+        base.append("現在の理解度は低めなので、短い例・図・一問だけの確認で小さく進める。")
+    else:
+        base.append("現在の理解度は中間なので、説明と小さな応用を組み合わせる。")
+
+    return "\n".join(f"- {line}" for line in base)
+
+
 def normalize_lesson_level(level):
     return level if level in LESSON_LEVEL_ORDER else "term"
 
@@ -3596,6 +3642,9 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 理解度:
 {format_understandings_for_prompt(understandings)}
 
+教材最適化:
+{infer_study_material_plan(subject, latest_message, learning_snapshot["understanding_percent"])}
+
 先生が参照している学習状態:
 - ロードマップ状態: {learning_snapshot["roadmap_status_line"]}
 - 現在地: {learning_snapshot["roadmap_current"] or "未設定"}
@@ -3777,6 +3826,10 @@ def create_textbook_preview(thread, user_id, source_note=""):
 - visual_diagram は文章だけでなく、簡単なテキスト図やフローチャートを書く。
 - code_example はプログラミングなら実際のコードを書く。プログラミング以外なら、式・例文・問題例を書く。
 - code_walkthrough はコードや例を一行ずつ、なぜ必要かまで説明する。
+- 科目に合わせて最適な教材を選ぶ。英語・韓国語・中国語・日本語なら単語問題、リスニング、発音、シャドーイング向け例文を入れる。
+- 数学なら、式だけでなくグラフ、図形、数直線、表、途中式の流れを visual_diagram に入れる。
+- プログラミングなら、フローチャート、コード図解、入力→処理→出力、データの流れを visual_diagram と code_example に入れる。
+- 教材は多ければ良いわけではない。読者の理解度と会話内容から、一番理解しやすい形を選ぶ。
 - key_points は最後に「ここだけは覚えよう」を3〜5個まとめる。
 - personal_points で初めてMemoryを使い、本人専用の注意点や説明方針を書く。
 - 理解確認問題は5問、応用問題は10問を作る。
@@ -6330,6 +6383,11 @@ Study PASの基本方針:
 - 画像の文字が読みにくい時は、推測で断定せず「ここは読み取りが怪しい」と伝えて確認してください。
 - ユーザーの苦手、理解度、好きな説明方法、前回の続き、テスト日、提出期限を自然に使ってください。
 - 「前にこの科目をやった日」「久しぶりかどうか」「テストまでの日数」が分かる時は、自然に学習ペースへ反映してください。
+- 教科や内容に合わせて教材を選んでください。文章だけで説明するより、音声・図・グラフ・コード図解・データの流れの方が理解しやすい場合は、その教材を優先してください。
+- 英語・韓国語・中国語・日本語学習では、単語問題、リスニング、発音練習、シャドーイング、ディクテーションを必要に応じて使ってください。ただし音声対象は問題や単語問題に絞ってください。
+- 数学では、式だけでなく、グラフ、図形、数直線、表、途中式の流れを使ってください。
+- プログラミングでは、フローチャート、コード図解、入力→処理→出力、データの流れを使ってください。
+- 教材を一度に詰め込みすぎず、その場で一番理解しやすい教材を1つ選んでください。
 - 勉強以外の人生相談、健康管理、日記、予定管理、Goal Plannerの話へ広げすぎないでください。
 - 返答の最後には、会話の流れに合う次の行動を1つだけ自然に提案してください。例: 「次はこの例を一緒に書いてみよう」「教科書に残すなら、この内容がよさそうです」。
 - 最後は必要に応じて「ここまで分かる？」のような理解確認を1つだけ入れてください。
