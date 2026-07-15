@@ -1770,10 +1770,12 @@
             }
         }
 
-        async function createTextbookPreview() {
+        async function createTextbookPreview(sourceNote) {
             if (!chatData || previewingTextbook || savingTextbook) {
                 return;
             }
+
+            const previewSourceNote = typeof sourceNote === "string" ? sourceNote : "";
 
             setPreviewingTextbook(true);
             setError("");
@@ -1782,7 +1784,7 @@
             try {
                 const data = await api(`/api/chat/${chatData.thread.id}/textbook_preview`, {
                     method: "POST",
-                    body: JSON.stringify({ source_note: "" })
+                    body: JSON.stringify({ source_note: previewSourceNote })
                 });
 
                 if (data && data.preview) {
@@ -1982,6 +1984,29 @@
                             h("strong", null, context.weak_note || "まだ少ない")
                         )
                     )
+                    ,
+                    context.should_suggest_textbook
+                        ? h(
+                            "section",
+                            { className: "study-next-proposal" },
+                            h("div", null,
+                                h("span", null, "教科書候補"),
+                                h("strong", null, "今日の授業を教科書に追加できます。"),
+                                h("p", null, context.textbook_proposal || "授業のまとめを教材として残せます。")
+                            ),
+                            h(
+                                "button",
+                                {
+                                    type: "button",
+                                    onClick: function () {
+                                        createTextbookPreview(context.textbook_proposal || "今日の授業終了まとめから教科書に追加してください。");
+                                    },
+                                    disabled: previewingTextbook || savingTextbook || !chatData
+                                },
+                                previewingTextbook ? h(LoadingLabel, { text: "準備中" }) : "プレビューを見る"
+                            )
+                        )
+                        : null
                 )
                 : null,
             error ? h("p", { className: "notice" }, error) : null,
@@ -2112,7 +2137,9 @@
                         {
                             type: "button",
                             className: "textbook-action",
-                            onClick: createTextbookPreview,
+                            onClick: function () {
+                                createTextbookPreview("");
+                            },
                             disabled: previewingTextbook || savingTextbook || !chatData
                         },
                         previewingTextbook ? h(LoadingLabel, { text: "作成中" }) : "教科書にする"

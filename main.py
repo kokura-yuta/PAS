@@ -35,7 +35,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-3")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-4")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -1240,6 +1240,16 @@ def collect_study_learning_snapshot(db, thread):
     elif subject_weak_memory:
         weak_note = subject_weak_memory.content or ""
 
+    textbook_proposal_memory = (
+        db.query(Memory)
+        .filter(Memory.user_id == thread.user_id)
+        .filter(Memory.is_active.is_(True))
+        .filter(or_(Memory.status == "confirmed", Memory.status.is_(None)))
+        .filter(Memory.category == "textbook_proposal")
+        .filter(Memory.content.contains(subject))
+        .order_by(Memory.created_at.desc())
+        .first()
+    )
     latest_textbook = textbooks[0] if textbooks else None
 
     if roadmap_items:
@@ -1273,7 +1283,9 @@ def collect_study_learning_snapshot(db, thread):
         "textbook_count": textbook_count,
         "understanding_percent": subject_understanding.percent if subject_understanding else 0,
         "weak_note": truncate_text(weak_note, 120),
-        "next_suggestion": next_suggestion
+        "next_suggestion": next_suggestion,
+        "should_suggest_textbook": textbook_proposal_memory is not None,
+        "textbook_proposal": truncate_text(textbook_proposal_memory.content, 180) if textbook_proposal_memory else ""
     }
 
 
@@ -5348,6 +5360,256 @@ lesson_end:
         }
 
 
+def append_lesson_note(current_text, new_text, max_length=1400):
+    current_text = (current_text or "").strip()
+    new_text = truncate_text((new_text or "").strip(), 280)
+
+    if not new_text:
+        return current_text
+
+    if new_text in current_text:
+        return current_text
+
+    if not current_text:
+        return new_text
+
+    return truncate_text(f"{current_text}\n{new_text}", max_length)
+
+
+def calculate_lesson_end_score(note_data, user_message, teacher_message):
+    score = 58
+
+    if (note_data.get("lesson_report") or "").strip():
+        score += 8
+
+    if contains_any_word(user_message, LESSON_UNDERSTOOD_WORDS):
+        score += 10
+
+    if (note_data.get("weak_note") or "").strip():
+        score -= 6
+
+    if contains_any_word(f"{user_message}\n{teacher_message}", STUDY_WEAK_NOTE_WORDS):
+        score -= 4
+
+    return max(35, min(78, score))
+
+
+def update_roadmap_after_lesson_end(db, roadmap_items, note_data, user_message):
+    current_item = choose_roadmap_focus_item(roadmap_items)
+
+    if current_item is None:
+        return None
+
+    status = normalize_roadmap_status(current_item.status)
+    understood = contains_any_word(user_message, LESSON_UNDERSTOOD_WORDS)
+    weak_note = (note_data.get("weak_note") or "").strip()
+
+    if status == "not_started":
+        current_item.status = "learning"
+        current_item.reason = "授業終了時に今日の学習位置として開始しました。"
+    elif understood and not weak_note:
+        current_item.status = "review"
+        current_item.reason = "授業終了時の整理で理解が進んだため、復習候補として記録しました。"
+    elif status == "learning":
+        current_item.reason = "授業終了時に、次回もここから続ける現在地として記録しました。"
+    else:
+        current_item.reason = "授業終了時に現在地を確認しました。"
+
+    current_item.updated_at = app_now()
+
+    next_item = next(
+        (
+            roadmap_item
+            for roadmap_item in sorted(roadmap_items, key=lambda value: value.sort_order or 0)
+            if roadmap_item.id != current_item.id
+            and normalize_roadmap_status(roadmap_item.status) == "not_started"
+        ),
+        None
+    )
+
+    return {
+        "current": current_item.title,
+        "current_status": current_item.status,
+        "next": next_item.title if next_item else ""
+    }
+
+
+def finalize_study_lesson_end(thread, user_id, user_message, teacher_message, history, note_data):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return
+
+    if not is_study_lesson_end_message(user_message):
+        return
+
+    note_data = note_data or {}
+    subject = normalize_subject_title(thread.title) or thread.title
+    lesson_report = (note_data.get("lesson_report") or "").strip()
+    weak_note = (note_data.get("weak_note") or "").strip()
+    next_step = (note_data.get("next_step") or "").strip()
+    evidence = truncate_text(lesson_report or teacher_message or user_message, 360)
+    score = calculate_lesson_end_score(note_data, user_message, teacher_message)
+    roadmap_progress = None
+
+    db = SessionLocal()
+
+    try:
+        lesson_state = (
+            db.query(StudyLessonState)
+            .filter(StudyLessonState.user_id == user_id)
+            .filter(StudyLessonState.thread_id == thread.id)
+            .first()
+        )
+
+        if lesson_state is None:
+            lesson_state = StudyLessonState(
+                user_id=user_id,
+                thread_id=thread.id,
+                subject=subject
+            )
+            db.add(lesson_state)
+
+        if lesson_report:
+            lesson_state.mastered_points = append_lesson_note(
+                lesson_state.mastered_points,
+                f"今日の学習結果: {lesson_report}"
+            )
+
+        if weak_note:
+            lesson_state.weak_points = append_lesson_note(
+                lesson_state.weak_points,
+                f"次回確認したい苦手: {weak_note}"
+            )
+
+        if next_step:
+            lesson_state.current_focus = next_step
+
+        lesson_state.live_understanding = max(
+            normalize_percent(lesson_state.live_understanding),
+            min(score, 82)
+        )
+        lesson_state.last_signal = "授業終了時に今日の学習結果を整理しました。"
+        lesson_state.updated_at = app_now()
+
+        subject_understanding = get_or_create_understanding(
+            db=db,
+            user_id=user_id,
+            subject=subject,
+            textbook_id=None,
+            scope_type="subject",
+            item_name=subject
+        )
+        update_understanding(
+            db=db,
+            understanding=subject_understanding,
+            ai_score=score,
+            assessment_count=1,
+            evidence=f"授業終了時の整理: {evidence}",
+            review_context={
+                "answer_type": "lesson_end",
+                "used_hint": False,
+                "weak_points": weak_note,
+                "unclear_points": weak_note
+            }
+        )
+
+        roadmap_items = []
+
+        if not is_roadmap_deleted(db, user_id, subject, thread.id):
+            roadmap_items = (
+                db.query(StudyRoadmapItem)
+                .filter(StudyRoadmapItem.user_id == user_id)
+                .filter(StudyRoadmapItem.subject == subject)
+                .filter(or_(StudyRoadmapItem.thread_id == thread.id, StudyRoadmapItem.thread_id.is_(None)))
+                .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+                .all()
+            )
+
+        roadmap_progress = update_roadmap_after_lesson_end(
+            db=db,
+            roadmap_items=roadmap_items,
+            note_data=note_data,
+            user_message=user_message
+        )
+
+        if roadmap_progress and roadmap_progress.get("current"):
+            item_understanding = get_or_create_understanding(
+                db=db,
+                user_id=user_id,
+                subject=subject,
+                textbook_id=None,
+                scope_type="item",
+                item_name=roadmap_progress["current"]
+            )
+            update_understanding(
+                db=db,
+                understanding=item_understanding,
+                ai_score=score,
+                assessment_count=1,
+                evidence=f"授業終了時に「{roadmap_progress['current']}」を整理: {evidence}",
+                review_context={
+                    "answer_type": "lesson_end",
+                    "used_hint": False,
+                    "weak_points": weak_note,
+                    "unclear_points": weak_note
+                }
+            )
+
+        db.commit()
+    finally:
+        db.close()
+
+    if lesson_report:
+        save_or_update_memory(
+            content=f"{subject}の授業終了まとめ: {lesson_report}",
+            category="lesson_summary",
+            importance=4,
+            confidence=0.84,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+    if weak_note:
+        save_or_update_memory(
+            content=f"{subject}の授業終了時の苦手: {weak_note}",
+            category="weak_area",
+            importance=5,
+            confidence=0.88,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+    if roadmap_progress and roadmap_progress.get("current"):
+        roadmap_memory = f"{subject}ロードマップの現在地: {roadmap_progress['current']}"
+
+        if roadmap_progress.get("next"):
+            roadmap_memory += f"。次の候補: {roadmap_progress['next']}"
+
+        save_or_update_memory(
+            content=roadmap_memory,
+            category="roadmap_progress",
+            importance=4,
+            confidence=0.82,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+    proposal_source = lesson_report or weak_note or next_step
+
+    if proposal_source:
+        save_or_update_memory(
+            content=f"{subject}の今日の授業は教科書に追加候補: {truncate_text(proposal_source, 160)}",
+            category="textbook_proposal",
+            importance=4,
+            confidence=0.8,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+
 def save_study_learning_notes(thread, user_id, user_message, teacher_message, history):
     if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
         return
@@ -5371,6 +5633,14 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
             lesson_end=lesson_end
         )
     except Exception:
+        finalize_study_lesson_end(
+            thread=thread,
+            user_id=user_id,
+            user_message=user_message,
+            teacher_message=teacher_message,
+            history=history,
+            note_data={}
+        )
         return
 
     weak_note = (note_data.get("weak_note") or "").strip()
@@ -5398,6 +5668,15 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
             status="confirmed",
             user_id=user_id
         )
+
+    finalize_study_lesson_end(
+        thread=thread,
+        user_id=user_id,
+        user_message=user_message,
+        teacher_message=teacher_message,
+        history=history,
+        note_data=note_data
+    )
 
     if next_step:
         save_or_update_memory(

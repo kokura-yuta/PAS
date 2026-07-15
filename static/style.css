@@ -662,6 +662,56 @@ body:has(.study-app) {
     -webkit-line-clamp: 2;
 }
 
+.study-next-proposal {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 12px;
+    align-items: center;
+    margin-top: 14px;
+    padding: 14px;
+    border: 1px solid rgba(21, 23, 25, 0.08);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.72);
+}
+
+.study-next-proposal span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--study-muted);
+    font-size: 11px;
+    font-weight: 850;
+}
+
+.study-next-proposal strong {
+    display: block;
+    color: var(--study-text);
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+.study-next-proposal p {
+    display: -webkit-box;
+    overflow: hidden;
+    margin: 6px 0 0;
+    color: var(--study-muted);
+    font-size: 12px;
+    line-height: 1.55;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
+.study-next-proposal button {
+    min-height: 42px;
+    padding: 0 16px;
+    border: none;
+    border-radius: 999px;
+    background: var(--study-text);
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 850;
+    white-space: nowrap;
+}
+
 .lesson-actions {
     display: flex;
     flex-wrap: nowrap;
