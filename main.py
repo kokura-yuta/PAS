@@ -35,7 +35,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-4")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-5")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -1193,6 +1193,11 @@ def collect_study_learning_snapshot(db, thread):
         ),
         None
     )
+    due_reviews = [
+        item
+        for item in understandings
+        if item.next_review_at and item.next_review_at.date() <= app_now().date()
+    ]
     current_item = choose_roadmap_focus_item(roadmap_items)
     next_item = next(
         (
@@ -1284,6 +1289,11 @@ def collect_study_learning_snapshot(db, thread):
         "understanding_percent": subject_understanding.percent if subject_understanding else 0,
         "weak_note": truncate_text(weak_note, 120),
         "next_suggestion": next_suggestion,
+        "due_review_count": len(due_reviews),
+        "due_review_items": [
+            truncate_text(item.item_name or item.scope_type or "復習", 60)
+            for item in due_reviews[:3]
+        ],
         "should_suggest_textbook": textbook_proposal_memory is not None,
         "textbook_proposal": truncate_text(textbook_proposal_memory.content, 180) if textbook_proposal_memory else ""
     }
@@ -3371,6 +3381,7 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 - 教科書数: {learning_snapshot["textbook_count"]}冊
 - 科目理解度: {learning_snapshot["understanding_percent"]}%
 - 苦手・つまずき: {learning_snapshot["weak_note"] or "まだ少ない"}
+- 今日復習すると良い項目: {", ".join(learning_snapshot["due_review_items"]) if learning_snapshot["due_review_items"] else "なし"}
 
 授業中の進行状態:
 {format_lesson_state_for_prompt(lesson_state)}
@@ -3683,8 +3694,43 @@ def confirm_textbook_preview(payload, user_id):
             summary=update_summary if action_type == "updated" else "教科書を作成"
         )
         db.add(history)
+        roadmap_progress = sync_learning_state_after_textbook(
+            db=db,
+            textbook=textbook,
+            user_id=user_id,
+            action_type=action_type,
+            update_summary=update_summary
+        )
         db.commit()
         db.refresh(textbook)
+
+        save_or_update_memory(
+            content=(
+                f"{textbook.subject}の教科書「{textbook.title}」を"
+                f"{'更新' if action_type == 'updated' else '作成'}しました。"
+                f"{update_summary}"
+            ),
+            category="textbook_asset",
+            importance=4,
+            confidence=0.86,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+        if roadmap_progress and roadmap_progress.get("item"):
+            save_or_update_memory(
+                content=(
+                    f"{textbook.subject}ロードマップの「{roadmap_progress['item'].title}」に、"
+                    f"教科書「{textbook.title}」を関連づけました。"
+                ),
+                category="roadmap_context",
+                importance=4,
+                confidence=0.82,
+                source_type="ai_inference",
+                status="confirmed",
+                user_id=user_id
+            )
 
         updates = (
             db.query(StudyTextbookUpdate)
@@ -3995,6 +4041,222 @@ def update_understanding(db, understanding, ai_score, assessment_count, evidence
     return understanding
 
 
+def load_active_roadmap_items_for_subject(db, user_id, subject, thread_id=None):
+    if is_roadmap_deleted(db, user_id, subject, thread_id):
+        return []
+
+    query = (
+        db.query(StudyRoadmapItem)
+        .filter(StudyRoadmapItem.user_id == user_id)
+        .filter(StudyRoadmapItem.subject == subject)
+    )
+
+    if thread_id is not None:
+        query = query.filter(or_(StudyRoadmapItem.thread_id == thread_id, StudyRoadmapItem.thread_id.is_(None)))
+
+    return (
+        query
+        .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+        .all()
+    )
+
+
+def find_related_roadmap_item(roadmap_items, text_value):
+    text_value = (text_value or "").lower()
+
+    for item in roadmap_items:
+        title = (item.title or "").strip().lower()
+
+        if title and title in text_value:
+            return item
+
+    return choose_roadmap_focus_item(roadmap_items)
+
+
+def roadmap_status_from_score(score_percent, used_hint=False, weak_text=""):
+    score = normalize_percent(score_percent)
+
+    if score >= 88 and not used_hint and not weak_text:
+        return "learned"
+
+    if score >= 70:
+        return "review"
+
+    return "learning"
+
+
+def update_roadmap_item_from_learning(
+    db,
+    roadmap_items,
+    source_text,
+    score_percent,
+    reason,
+    used_hint=False,
+    weak_text=""
+):
+    item = find_related_roadmap_item(roadmap_items, source_text)
+
+    if item is None or normalize_roadmap_status(item.status) == "skipped":
+        return None
+
+    next_status = roadmap_status_from_score(score_percent, used_hint=used_hint, weak_text=weak_text)
+    current_status = normalize_roadmap_status(item.status)
+
+    if current_status == "learned":
+        next_status = "learned"
+    elif current_status == "review" and next_status == "learning":
+        next_status = "review"
+
+    item.status = next_status
+    item.reason = truncate_text(reason, 240)
+    item.updated_at = app_now()
+
+    next_item = next(
+        (
+            roadmap_item
+            for roadmap_item in sorted(roadmap_items, key=lambda value: value.sort_order or 0)
+            if roadmap_item.id != item.id
+            and normalize_roadmap_status(roadmap_item.status) == "not_started"
+        ),
+        None
+    )
+
+    if next_status in ["learned", "review"] and next_item is not None:
+        next_item.status = "learning"
+        next_item.reason = f"「{item.title}」の学習が進んだため、次に進みやすい単元として開始しました。"
+        next_item.updated_at = app_now()
+
+    return {
+        "item": item,
+        "next_item": next_item,
+        "status": next_status
+    }
+
+
+def sync_learning_state_after_assessment(db, textbook, user_id, assessment, score_percent):
+    roadmap_items = load_active_roadmap_items_for_subject(
+        db=db,
+        user_id=user_id,
+        subject=textbook.subject,
+        thread_id=textbook.thread_id
+    )
+    source_text = " ".join([
+        textbook.title or "",
+        textbook.key_points or "",
+        textbook.personal_points or "",
+        assessment.understood_points or "",
+        assessment.weak_points or "",
+        assessment.unclear_points or ""
+    ])
+    roadmap_progress = update_roadmap_item_from_learning(
+        db=db,
+        roadmap_items=roadmap_items,
+        source_text=source_text,
+        score_percent=score_percent,
+        reason=f"教科書「{textbook.title}」の回答結果を反映しました。",
+        used_hint=bool(assessment.used_hint),
+        weak_text=f"{assessment.weak_points or ''} {assessment.unclear_points or ''}"
+    )
+
+    lesson_state = None
+
+    if textbook.thread_id:
+        lesson_state = load_or_create_lesson_state(db, user_id, textbook.thread_id, textbook.subject)
+        lesson_state.live_understanding = max(
+            normalize_percent(lesson_state.live_understanding),
+            min(normalize_percent(score_percent), 92)
+        )
+        lesson_state.mastered_points = append_lesson_note(
+            lesson_state.mastered_points,
+            assessment.understood_points
+        )
+        lesson_state.weak_points = append_lesson_note(
+            lesson_state.weak_points,
+            assessment.weak_points or assessment.unclear_points
+        )
+        lesson_state.current_focus = (
+            assessment.next_review_content
+            or (roadmap_progress["next_item"].title if roadmap_progress and roadmap_progress.get("next_item") else lesson_state.current_focus)
+        )
+        lesson_state.last_signal = "教科書の回答結果を授業状態へ反映しました。"
+        lesson_state.updated_at = app_now()
+
+    if roadmap_progress and roadmap_progress.get("item"):
+        roadmap_item = roadmap_progress["item"]
+        item_understanding = get_or_create_understanding(
+            db=db,
+            user_id=user_id,
+            subject=textbook.subject,
+            textbook_id=None,
+            scope_type="item",
+            item_name=roadmap_item.title
+        )
+        update_understanding(
+            db=db,
+            understanding=item_understanding,
+            ai_score=score_percent,
+            assessment_count=1,
+            evidence=f"教科書「{textbook.title}」の回答からロードマップ項目へ反映",
+            review_context={
+                "answer_type": assessment.answer_type,
+                "used_hint": bool(assessment.used_hint),
+                "weak_points": assessment.weak_points,
+                "unclear_points": assessment.unclear_points
+            }
+        )
+
+    return roadmap_progress
+
+
+def sync_learning_state_after_textbook(db, textbook, user_id, action_type, update_summary):
+    roadmap_items = load_active_roadmap_items_for_subject(
+        db=db,
+        user_id=user_id,
+        subject=textbook.subject,
+        thread_id=textbook.thread_id
+    )
+    source_text = " ".join([
+        textbook.title or "",
+        textbook.key_points or "",
+        textbook.personal_points or "",
+        textbook.weak_points or "",
+        textbook.unclear_points or ""
+    ])
+    roadmap_progress = update_roadmap_item_from_learning(
+        db=db,
+        roadmap_items=roadmap_items,
+        source_text=source_text,
+        score_percent=45,
+        reason=f"教科書「{textbook.title}」を{ '更新' if action_type == 'updated' else '作成' }したため、関連する学習単元として紐づけました。",
+        weak_text=textbook.weak_points or textbook.unclear_points or ""
+    )
+
+    textbook_understanding = get_or_create_understanding(
+        db=db,
+        user_id=user_id,
+        subject=textbook.subject,
+        textbook_id=textbook.id,
+        scope_type="textbook",
+        item_name=textbook.title
+    )
+
+    if normalize_percent(textbook_understanding.percent) == 0:
+        update_understanding(
+            db=db,
+            understanding=textbook_understanding,
+            ai_score=35,
+            assessment_count=0,
+            evidence=f"教科書「{textbook.title}」を作成しました。問題回答後に理解度を更新します。"
+        )
+
+    db.query(Memory).filter(Memory.user_id == user_id).filter(Memory.category == "textbook_proposal").filter(Memory.content.contains(textbook.subject)).update(
+        {"is_active": False},
+        synchronize_session=False
+    )
+
+    return roadmap_progress
+
+
 def submit_textbook_answer(textbook_id, user_id, payload):
     answer_text = (payload.answer_text or "").strip()
 
@@ -4122,6 +4384,13 @@ def submit_textbook_answer(textbook_id, user_id, payload):
                 review_context
             )
 
+        roadmap_progress = sync_learning_state_after_assessment(
+            db=db,
+            textbook=textbook,
+            user_id=user_id,
+            assessment=assessment,
+            score_percent=score_percent
+        )
         textbook.updated_at = app_now()
         db.commit()
         db.refresh(assessment)
@@ -4143,6 +4412,27 @@ def submit_textbook_answer(textbook_id, user_id, payload):
                 category="weak_area",
                 importance=4,
                 confidence=0.8,
+                source_type="ai_inference",
+                status="confirmed",
+                user_id=user_id
+            )
+
+        if roadmap_progress and roadmap_progress.get("item"):
+            roadmap_item = roadmap_progress["item"]
+            roadmap_next = roadmap_progress.get("next_item")
+            roadmap_memory = (
+                f"{textbook.subject}ロードマップの「{roadmap_item.title}」を、"
+                f"教科書回答の結果から「{get_roadmap_status_label(roadmap_item.status)}」として更新しました。"
+            )
+
+            if roadmap_next:
+                roadmap_memory += f" 次の候補は「{roadmap_next.title}」です。"
+
+            save_or_update_memory(
+                content=roadmap_memory,
+                category="roadmap_progress",
+                importance=4,
+                confidence=0.84,
                 source_type="ai_inference",
                 status="confirmed",
                 user_id=user_id

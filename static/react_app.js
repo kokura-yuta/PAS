@@ -1982,7 +1982,15 @@
                             null,
                             h("span", null, "苦手メモ"),
                             h("strong", null, context.weak_note || "まだ少ない")
-                        )
+                        ),
+                        context.due_review_count
+                            ? h(
+                                "article",
+                                null,
+                                h("span", null, "復習候補"),
+                                h("strong", null, (context.due_review_items || []).join(" / ") || `${context.due_review_count}件`)
+                            )
+                            : null
                     )
                     ,
                     context.should_suggest_textbook
