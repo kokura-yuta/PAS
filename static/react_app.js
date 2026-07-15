@@ -594,7 +594,8 @@
             learned: "理解済み",
             learning: "学習中",
             review: "復習",
-            not_started: "未学習"
+            not_started: "未学習",
+            skipped: "飛ばした単元"
         };
 
         function openSubjectLesson(subject) {
@@ -610,7 +611,7 @@
             const currentItem = subject.current_item ? `現在地「${subject.current_item.title}」` : "現在地";
             const nextItem = subject.next_item ? `次のおすすめ「${subject.next_item.title}」` : "次のおすすめ";
             const confirmed = window.confirm(
-                `${subject.subject}のロードマップを削除しますか？\n\n削除すると、学習目標・${currentItem}・進捗・${nextItem}・AIが参照しているロードマップ情報もMemoryから外します。\n\n教科書・理解度・添削結果は残ります。`
+                `${subject.roadmap_title || subject.subject}を削除しますか？\n\n削除すると、学習目標・${currentItem}・進捗・${nextItem}・AIが参照しているロードマップ情報もMemoryから外します。\n\n教科書・理解度・添削結果は残ります。`
             );
 
             if (!confirmed) {
@@ -694,7 +695,8 @@
                                         "div",
                                         null,
                                         h("p", { className: "section-kicker" }, "教材ロードマップ"),
-                                        h("h2", null, subject.subject)
+                                        h("h2", null, subject.roadmap_title || subject.subject),
+                                        h("small", null, subject.subject)
                                     ),
                                     h(
                                         "button",
@@ -719,12 +721,17 @@
                                         deletingKey === subject.subject ? h(LoadingLabel, { text: "削除中" }) : "削除"
                                     )
                                 ),
+                                subject.goal
+                                    ? h("p", { className: "roadmap-goal-text" }, `目標: ${subject.goal}`)
+                                    : null,
                                 h(
                                     "div",
                                     { className: "roadmap-summary-pills" },
                                     h("span", null, `理解度 ${subject.understanding_percent || 0}%`),
+                                    h("span", null, `完了 ${subject.completed_count || 0}/${subject.total_count || 0}`),
                                     h("span", null, subject.current_item ? `現在地 ${subject.current_item.title}` : "現在地 未設定"),
-                                    h("span", null, subject.next_item ? `次の候補 ${subject.next_item.title}` : "次の候補なし")
+                                    h("span", null, subject.next_item ? `次の候補 ${subject.next_item.title}` : "次の候補なし"),
+                                    subject.latest_updated_at ? h("span", null, `更新 ${subject.latest_updated_at}`) : null
                                 ),
                                 h(
                                     "div",
@@ -771,12 +778,15 @@
                                                     }
                                                 },
                                                 h("span", { className: "roadmap-step-number" }, String(index + 1).padStart(2, "0")),
-                                                h(
-                                                    "span",
-                                                    { className: "roadmap-item-body" },
-                                                    h("strong", null, item.title),
-                                                    h("small", null, item.reason || "この順番で進むと理解しやすくなります。")
-                                                ),
+                                                    h(
+                                                        "span",
+                                                        { className: "roadmap-item-body" },
+                                                        h("strong", null, item.title),
+                                                        h("small", null, item.reason || "この順番で進むと理解しやすくなります。"),
+                                                        typeof item.understanding_percent === "number" && item.understanding_percent > 0
+                                                            ? h("small", null, `理解度 ${item.understanding_percent}%`)
+                                                            : null
+                                                    ),
                                                 h("em", null, statusLabels[item.status] || "未学習")
                                             );
                                         })

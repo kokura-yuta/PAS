@@ -35,7 +35,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-1")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-2")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -103,6 +103,33 @@ ROADMAP_CREATE_WORDS = [
     "作る",
     "作りたい",
     "作ろう"
+]
+ROADMAP_GOAL_DETAIL_WORDS = [
+    "マスター",
+    "できるよう",
+    "作れるよう",
+    "話せるよう",
+    "読めるよう",
+    "解けるよう",
+    "合格",
+    "基礎",
+    "応用",
+    "仕事",
+    "Web",
+    "AI",
+    "アプリ",
+    "試験",
+    "資格",
+    "面接",
+    "TOEIC",
+    "点"
+]
+ROADMAP_ADD_WORDS = [
+    "ロードマップに追加",
+    "単元に追加",
+    "追加して",
+    "追加したい",
+    "追加する"
 ]
 LESSON_LEVEL_ORDER = [
     "term",
@@ -557,11 +584,14 @@ class StudyRoadmapItem(Base):
     user_id = Column(Integer, index=True)
     thread_id = Column(Integer, index=True)
     subject = Column(String(100), index=True)
+    roadmap_title = Column(String(255))
+    goal = Column(Text)
     title = Column(String(255))
     status = Column(String(50), default="not_started")
     reason = Column(Text)
     sort_order = Column(Integer, default=0)
     source_type = Column(String(50), default="ai")
+    created_from_message = Column(Text)
     created_at = Column(DateTime, default=app_now)
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
@@ -713,7 +743,10 @@ def ensure_study_roadmap_columns():
     ensure_columns(
         "study_roadmap_items",
         {
-            "thread_id": "INTEGER"
+            "thread_id": "INTEGER",
+            "roadmap_title": "VARCHAR(255)",
+            "goal": "TEXT",
+            "created_from_message": "TEXT"
         }
     )
 
@@ -1628,15 +1661,37 @@ def serialize_assessment(assessment):
     }
 
 
-def serialize_roadmap_item(item):
+def get_roadmap_item_understanding_percent(item, understandings=None):
+    title = (item.title or "").strip().lower()
+
+    if not title:
+        return 0
+
+    related = [
+        understanding
+        for understanding in (understandings or [])
+        if title in ((understanding.item_name or "").lower())
+    ]
+
+    if not related:
+        return 0
+
+    return max(normalize_percent(understanding.percent) for understanding in related)
+
+
+def serialize_roadmap_item(item, understandings=None):
     return {
         "id": item.id,
         "thread_id": item.thread_id,
         "subject": item.subject,
+        "roadmap_title": item.roadmap_title or f"{item.subject}ロードマップ",
+        "goal": item.goal or "",
         "title": item.title or "",
         "status": item.status or "not_started",
         "reason": item.reason or "",
-        "sort_order": item.sort_order or 0
+        "sort_order": item.sort_order or 0,
+        "understanding_percent": get_roadmap_item_understanding_percent(item, understandings),
+        "updated_at": format_datetime(item.updated_at)
     }
 
 
@@ -1899,6 +1954,49 @@ def is_roadmap_create_message(message):
     return has_roadmap_word and contains_any_word(text_value, ROADMAP_CREATE_WORDS)
 
 
+def has_roadmap_goal_detail(message):
+    text_value = (message or "").strip()
+
+    if contains_any_word(text_value, ROADMAP_GOAL_DETAIL_WORDS):
+        return True
+
+    cleaned = text_value
+    for word in ROADMAP_CREATE_WORDS + ["ロードマップ", "学習計画", "順番", "考えて", "この目標までの"]:
+        cleaned = cleaned.replace(word, "")
+
+    cleaned = cleaned.replace("を", "").replace("の", "").replace("。", "").replace("、", "").strip()
+    return len(cleaned) >= 8
+
+
+def should_create_roadmap_from_message(message):
+    return is_roadmap_create_message(message) and has_roadmap_goal_detail(message)
+
+
+def should_ask_roadmap_goal_question(message):
+    return is_roadmap_create_message(message) and not has_roadmap_goal_detail(message)
+
+
+def extract_roadmap_addition_title(message):
+    text_value = (message or "").strip()
+
+    if not contains_any_word(text_value, ROADMAP_ADD_WORDS):
+        return ""
+
+    quoted_match = re.search(r"[「『](.*?)[」』]", text_value)
+    if quoted_match:
+        return truncate_text(quoted_match.group(1).strip(), 80)
+
+    add_match = re.search(r"(.+?)(?:を|も)?(?:ロードマップに追加|単元に追加|追加して|追加したい|追加する)", text_value)
+    if not add_match:
+        return ""
+
+    title = add_match.group(1)
+    for word in ["ロードマップ", "単元", "あと", "それと", "次に"]:
+        title = title.replace(word, "")
+
+    return truncate_text(title.strip(" 　、。"), 80)
+
+
 def choose_roadmap_focus_item(roadmap_items):
     for status in ["learning", "review"]:
         for item in roadmap_items:
@@ -1924,6 +2022,77 @@ def find_roadmap_item_from_message(roadmap_items, message):
     return choose_roadmap_focus_item(roadmap_items)
 
 
+def add_roadmap_item_from_message(db, roadmap_items, message):
+    title = extract_roadmap_addition_title(message)
+
+    if not title or not roadmap_items:
+        return None
+
+    normalized_title = title.lower()
+    if any((item.title or "").strip().lower() == normalized_title for item in roadmap_items):
+        return None
+
+    current_item = choose_roadmap_focus_item(roadmap_items)
+    insert_order = (current_item.sort_order or 0) + 1 if current_item else len(roadmap_items)
+    template_item = roadmap_items[0]
+
+    for item in roadmap_items:
+        if (item.sort_order or 0) >= insert_order:
+            item.sort_order = (item.sort_order or 0) + 1
+
+    new_item = StudyRoadmapItem(
+        user_id=template_item.user_id,
+        thread_id=template_item.thread_id,
+        subject=template_item.subject,
+        roadmap_title=template_item.roadmap_title,
+        goal=template_item.goal,
+        title=title,
+        status="not_started",
+        reason="ユーザーが会話の中で追加を承認したため、現在地の近くに追加しました。",
+        sort_order=insert_order,
+        source_type="user",
+        created_from_message=truncate_text(message or "", 500)
+    )
+    db.add(new_item)
+    db.commit()
+    db.refresh(new_item)
+    return new_item
+
+
+def advance_roadmap_when_understood(db, roadmap_items, message):
+    if not contains_any_word(message, LESSON_UNDERSTOOD_WORDS):
+        return None
+
+    item = choose_roadmap_focus_item(roadmap_items)
+
+    if item is None or normalize_roadmap_status(item.status) in ["learned", "skipped"]:
+        return None
+
+    item.status = "learned"
+    item.reason = "授業中に理解できた反応があったため、完了として記録しました。"
+    item.updated_at = app_now()
+
+    next_item = next(
+        (
+            roadmap_item
+            for roadmap_item in sorted(roadmap_items, key=lambda value: value.sort_order or 0)
+            if roadmap_item.id != item.id and normalize_roadmap_status(roadmap_item.status) == "not_started"
+        ),
+        None
+    )
+
+    if next_item is not None:
+        next_item.status = "learning"
+        next_item.reason = "前の単元が理解済みになったため、次に進みやすい単元として開始しました。"
+        next_item.updated_at = app_now()
+
+    db.commit()
+    return {
+        "completed": item.title,
+        "next": next_item.title if next_item else ""
+    }
+
+
 def apply_roadmap_message_intent(db, roadmap_items, message):
     intent = {
         "type": "",
@@ -1947,6 +2116,15 @@ def apply_roadmap_message_intent(db, roadmap_items, message):
                 "item_title": item.title
             }
 
+    elif contains_any_word(message, ROADMAP_ADD_WORDS):
+        item = add_roadmap_item_from_message(db, roadmap_items, message)
+
+        if item is not None:
+            intent = {
+                "type": "add",
+                "item_title": item.title
+            }
+
     elif is_roadmap_follow_message(message):
         item = choose_roadmap_focus_item(roadmap_items)
 
@@ -1961,6 +2139,16 @@ def apply_roadmap_message_intent(db, roadmap_items, message):
             intent = {
                 "type": "follow",
                 "item_title": item.title
+            }
+
+    elif contains_any_word(message, LESSON_UNDERSTOOD_WORDS):
+        progress = advance_roadmap_when_understood(db, roadmap_items, message)
+
+        if progress is not None:
+            intent = {
+                "type": "progress",
+                "item_title": progress["completed"],
+                "next_item_title": progress["next"]
             }
 
     return intent
@@ -1990,7 +2178,24 @@ def fallback_roadmap_items(subject, textbooks, understandings):
     ]
 
 
-def generate_roadmap_items_with_ai(subject, textbooks, understandings):
+def build_fallback_roadmap_goal(subject, goal_text):
+    clean_goal = truncate_text((goal_text or "").strip(), 180)
+
+    if clean_goal:
+        return clean_goal
+
+    return f"{subject}を基礎から理解し、自分で使えるようになる"
+
+
+def fallback_roadmap_plan(subject, textbooks, understandings, goal_text=""):
+    return {
+        "roadmap_title": f"{subject}ロードマップ",
+        "goal": build_fallback_roadmap_goal(subject, goal_text),
+        "items": fallback_roadmap_items(subject, textbooks, understandings)
+    }
+
+
+def generate_roadmap_plan_with_ai(subject, textbooks, understandings, goal_text=""):
     textbook_titles = [textbook.title for textbook in textbooks if textbook.title]
     understanding_summary = [
         {
@@ -2006,18 +2211,23 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
             model="gpt-4.1-mini",
             input=f"""
 あなたはStudy PASの学習設計をする先生です。
-科目ごとに、ユーザーが理解しやすい学習ロードマップを作ってください。
+ユーザーの会話で出た目標をもとに、Study PASの学習ロードマップを作ってください。
 
 ルール:
+- roadmap_title は後から見ても目的が分かる名前にする。
+- goal はユーザーが最終的にできるようになりたい状態を書く。
 - 6〜10個の単元にする。
 - 順番はおすすめだが、強制しない。
 - status は learned / learning / review / not_started / skipped のどれか。
 - 既に教科書や理解度がある内容は反映する。
 - 前提知識を飛ばしそうな場合は reason でやさしく説明する。
+- ユーザーの目標がWebアプリ、AI開発、資格、会話などに寄っている場合は、その目的に合う単元構成にする。
 - 必ずJSONだけで返す。
 
 返答形式:
 {{
+  "roadmap_title": "PythonでWebアプリを作れるようになるロードマップ",
+  "goal": "FastAPIを使って小さなWebアプリを自分で作れるようになる",
   "items": [
     {{"title": "関数", "status": "learning", "reason": "今のPython学習の中心になっているため"}},
     {{"title": "return", "status": "review", "reason": "以前少し曖昧だったため"}}
@@ -2026,6 +2236,9 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
 
 科目:
 {subject}
+
+ユーザーの目標・依頼:
+{goal_text or "未指定"}
 
 作成済み教科書:
 {json.dumps(textbook_titles, ensure_ascii=False)}
@@ -2052,12 +2265,28 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
                 "reason": truncate_text((item.get("reason") or "").strip(), 240)
             })
 
-        return normalized or None
+        if not normalized:
+            return None
+
+        return {
+            "roadmap_title": truncate_text((data.get("roadmap_title") or f"{subject}ロードマップ").strip(), 180),
+            "goal": truncate_text((data.get("goal") or build_fallback_roadmap_goal(subject, goal_text)).strip(), 300),
+            "items": normalized
+        }
     except Exception:
         return None
 
 
-def load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread_id=None):
+def load_or_create_roadmap(
+    db,
+    user_id,
+    subject,
+    textbooks,
+    understandings,
+    thread_id=None,
+    allow_create=False,
+    goal_text=""
+):
     if is_roadmap_deleted(db, user_id, subject, thread_id):
         return []
 
@@ -2097,23 +2326,43 @@ def load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thre
             )
 
     if not existing_items:
-        roadmap_items = generate_roadmap_items_with_ai(subject, textbooks, understandings)
+        if not allow_create:
+            return []
+
+        roadmap_plan = generate_roadmap_plan_with_ai(subject, textbooks, understandings, goal_text)
         source_type = "ai"
 
-        if not roadmap_items:
-            roadmap_items = fallback_roadmap_items(subject, textbooks, understandings)
+        if not roadmap_plan:
+            roadmap_plan = fallback_roadmap_plan(subject, textbooks, understandings, goal_text)
             source_type = "fallback"
 
-        for index, item in enumerate(roadmap_items):
+        roadmap_title = roadmap_plan["roadmap_title"]
+        roadmap_goal = roadmap_plan["goal"]
+
+        db.add(Memory(
+            user_id=user_id,
+            content=f"{subject}ロードマップの目標: {roadmap_goal}",
+            category="roadmap_goal",
+            importance=4,
+            confidence=0.9,
+            source_type="user_statement",
+            status="confirmed",
+            is_active=True
+        ))
+
+        for index, item in enumerate(roadmap_plan["items"]):
             db.add(StudyRoadmapItem(
                 user_id=user_id,
                 thread_id=thread_id,
                 subject=subject,
+                roadmap_title=roadmap_title,
+                goal=roadmap_goal,
                 title=item["title"],
                 status=item["status"],
                 reason=item["reason"],
                 sort_order=index,
-                source_type=source_type
+                source_type=source_type,
+                created_from_message=truncate_text(goal_text or "", 500)
             ))
 
         db.commit()
@@ -2134,7 +2383,7 @@ def load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thre
 
     db.commit()
 
-    return [serialize_roadmap_item(item) for item in existing_items]
+    return [serialize_roadmap_item(item, understandings) for item in existing_items]
 
 
 def reset_study_roadmap_for_thread(db, thread):
@@ -2160,6 +2409,11 @@ def reset_study_roadmap_for_thread(db, thread):
 
 
 def build_roadmap_goal_summary(subject, roadmap_items):
+    if roadmap_items:
+        first_item = roadmap_items[0]
+        if first_item.roadmap_title or first_item.goal:
+            return f"{first_item.roadmap_title or subject}: {first_item.goal or '目標未設定'}"
+
     item_titles = [
         item.title
         for item in roadmap_items
@@ -2451,15 +2705,31 @@ def load_roadmap_overview(user_id):
                 ),
                 None
             )
+            first_item = roadmap_items[0]
+            updated_values = [
+                item.get("updated_at")
+                for item in roadmap_items
+                if item.get("updated_at")
+            ]
+            completed_count = len([
+                item
+                for item in roadmap_items
+                if item["status"] == "learned"
+            ])
 
             roadmaps.append({
                 "subject": subject,
+                "roadmap_title": first_item.get("roadmap_title") or f"{subject}ロードマップ",
+                "goal": first_item.get("goal") or "",
                 "thread_id": thread_ids.get(subject),
                 "chat_url": chat_urls.get(subject, ""),
                 "bookshelf_url": f"/bookshelf/{quote(subject)}",
                 "understanding_percent": subject_understanding.percent if subject_understanding else 0,
                 "current_item": current_item,
                 "next_item": next_item,
+                "completed_count": completed_count,
+                "total_count": len(roadmap_items),
+                "latest_updated_at": max(updated_values) if updated_values else "",
                 "textbooks": [
                     serialize_textbook_summary(textbook)
                     for textbook in subject_textbooks
@@ -2474,9 +2744,16 @@ def load_roadmap_overview(user_id):
 
 def format_roadmap_items_for_prompt(roadmap_items):
     if not roadmap_items:
-        return "ロードマップはまだありません。必要ならこの科目の基礎から作って進めてください。"
+        return (
+            "ロードマップはまだありません。"
+            "ユーザーが明確にロードマップ作成を依頼した場合だけ作成してください。"
+            "目標が曖昧な場合は、どこまでできるようになりたいかを先に確認してください。"
+        )
 
     lines = []
+    first_item = roadmap_items[0]
+    roadmap_title = first_item.roadmap_title or f"{first_item.subject}ロードマップ"
+    roadmap_goal = first_item.goal or "未設定"
 
     for index, item in enumerate(roadmap_items[:12], start=1):
         lines.append(
@@ -2491,7 +2768,8 @@ def format_roadmap_items_for_prompt(roadmap_items):
         if normalize_roadmap_status(item.status) == "skipped"
     ]
 
-    text_value = "\n".join(lines)
+    text_value = f"ロードマップ名: {roadmap_title}\n最終目標: {roadmap_goal}\n"
+    text_value += "\n".join(lines)
     text_value += f"\n現在地: {current_item.title if current_item else '未設定'}"
     text_value += f"\n飛ばした単元: {', '.join(skipped_items) if skipped_items else 'なし'}"
 
@@ -2738,17 +3016,30 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 
         roadmap_deleted = is_roadmap_deleted(db, user_id, subject, thread.id)
         roadmap_intent = {"type": "", "item_title": ""}
-        roadmap_recreated = False
+        roadmap_create_requested = is_roadmap_create_message(latest_message)
+        roadmap_create_allowed = should_create_roadmap_from_message(latest_message)
+        roadmap_needs_goal = should_ask_roadmap_goal_question(latest_message)
+        roadmap_created = False
 
-        if roadmap_deleted and is_roadmap_create_message(latest_message):
+        if roadmap_deleted and roadmap_create_allowed:
             clear_roadmap_deletion_marker(db, user_id, subject, thread.id)
             roadmap_deleted = False
-            roadmap_recreated = True
 
         if roadmap_deleted:
             roadmap_items = []
         else:
-            load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread.id)
+            had_roadmap = has_active_roadmap_for_thread(thread)
+            roadmap_items = load_or_create_roadmap(
+                db,
+                user_id,
+                subject,
+                textbooks,
+                understandings,
+                thread.id,
+                allow_create=roadmap_create_allowed,
+                goal_text=latest_message
+            )
+            roadmap_created = roadmap_create_allowed and not had_roadmap and bool(roadmap_items)
             roadmap_items = (
                 db.query(StudyRoadmapItem)
                 .filter(StudyRoadmapItem.user_id == user_id)
@@ -2783,10 +3074,28 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
                 f"「{roadmap_intent['item_title']}」を飛ばすと言っています。"
                 "今後は飛ばした単元として扱い、必要な前提だけ短く補足してください。"
             )
-        elif roadmap_recreated:
+        elif roadmap_intent["type"] == "add":
             intent_text = (
-                "今回のロードマップ指示: ユーザーは削除後の新しいロードマップ作成を求めています。"
-                "過去に削除した目標や現在地を引き継がず、残っている教科書・理解度だけ参考にしてゼロから授業を始めてください。"
+                "今回のロードマップ指示: ユーザーが"
+                f"「{roadmap_intent['item_title']}」をロードマップへ追加しました。"
+                "追加した単元と既存の現在地の関係を短く説明してください。"
+            )
+        elif roadmap_intent["type"] == "progress":
+            next_title = roadmap_intent.get("next_item_title") or "次の単元"
+            intent_text = (
+                "今回のロードマップ更新: ユーザーの理解反応をもとに、"
+                f"「{roadmap_intent['item_title']}」を理解済みにし、次の候補を「{next_title}」にしました。"
+                "更新したことを短く伝え、次へ進むか確認してください。"
+            )
+        elif roadmap_created:
+            intent_text = (
+                "今回のロードマップ指示: ユーザーの明確な依頼により、新しいロードマップを作成しました。"
+                "作成したロードマップ名・最終目標・最初の現在地を短く伝えてから、授業を始めてください。"
+            )
+        elif roadmap_needs_goal and not roadmap_items:
+            intent_text = (
+                "今回のロードマップ指示: ユーザーはロードマップ作成を求めていますが、最終目標がまだ曖昧です。"
+                "ロードマップはまだ作成せず、どこまでできるようになりたいかを選びやすい形で確認してください。"
             )
 
         roadmap_prompt = format_roadmap_items_for_prompt(roadmap_items)
@@ -2796,6 +3105,12 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
                 "この会話のロードマップはユーザーが削除済みです。"
                 "過去のロードマップの目標・現在地・進捗・次のおすすめ・スキップ単元は参照しないでください。"
                 "ユーザーが新しい目標を話した場合だけ、新しいロードマップを作成できることを提案してください。"
+            )
+        elif roadmap_create_requested and not roadmap_create_allowed and not roadmap_items:
+            roadmap_prompt = (
+                "ロードマップ作成依頼はありますが、目標が曖昧です。"
+                "まだロードマップは作成していません。"
+                "基礎理解、アプリ制作、AI開発、資格対策など、どのゴールに向かうかを確認してください。"
             )
 
         return f"""
