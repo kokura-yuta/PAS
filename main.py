@@ -249,6 +249,8 @@ class TextbookConfirmPayload(BaseModel):
     common_mistakes: str = ""
     check_questions: str = ""
     application_questions: str = ""
+    listening_questions: str = ""
+    pronunciation_questions: str = ""
     model_answers: str = ""
     detailed_explanations: str = ""
     related_textbooks: str = ""
@@ -535,6 +537,8 @@ class StudyTextbook(Base):
     visual_diagram = Column(Text)
     code_example = Column(Text)
     code_walkthrough = Column(Text)
+    listening_questions = Column(Text)
+    pronunciation_questions = Column(Text)
     personal_points = Column(Text)
     basic_explanation = Column(Text)
     concrete_examples = Column(Text)
@@ -740,6 +744,8 @@ def ensure_study_textbook_chapter_columns():
             "visual_diagram": "TEXT",
             "code_example": "TEXT",
             "code_walkthrough": "TEXT",
+            "listening_questions": "TEXT",
+            "pronunciation_questions": "TEXT",
             "personal_points": "TEXT"
         }
     )
@@ -1944,6 +1950,8 @@ TEXTBOOK_CONTENT_FIELDS = [
     "common_mistakes",
     "check_questions",
     "application_questions",
+    "listening_questions",
+    "pronunciation_questions",
     "model_answers",
     "detailed_explanations",
     "related_textbooks"
@@ -1966,6 +1974,8 @@ TEXTBOOK_FIELD_LABELS = {
     "common_mistakes": "本人が間違えやすいポイント",
     "check_questions": "理解確認問題5問",
     "application_questions": "応用問題10問",
+    "listening_questions": "リスニング用問題10問",
+    "pronunciation_questions": "発音問題5問",
     "model_answers": "模範解答",
     "detailed_explanations": "詳しい解説",
     "related_textbooks": "関連する教科書"
@@ -3310,6 +3320,14 @@ def infer_study_material_plan(subject, latest_message="", understanding_percent=
     return "\n".join(f"- {line}" for line in base)
 
 
+def is_language_learning_subject(subject):
+    subject_text = subject or ""
+    return any(
+        word in subject_text
+        for word in ["英語", "英文", "英単語", "TOEIC", "韓国語", "ハングル", "中国語", "中文", "日本語", "JLPT", "HSK"]
+    ) or subject_text.lower() in ["english", "korean", "chinese", "japanese"]
+
+
 def normalize_lesson_level(level):
     return level if level in LESSON_LEVEL_ORDER else "term"
 
@@ -3727,6 +3745,13 @@ def fallback_textbook_preview(thread, user_id, source_material):
     existing_textbooks = load_textbook_options_for_subject(thread.title, user_id)
     first_existing = existing_textbooks[0] if existing_textbooks else None
     action_mode = "update" if first_existing else "create"
+    language_subject = is_language_learning_subject(thread.title)
+    fallback_listening = "\n".join(
+        [f"{index}. 音声を聞いて、聞こえた単語または文を書いてください。" for index in range(1, 11)]
+    ) if language_subject else ""
+    fallback_pronunciation = "\n".join(
+        [f"{index}. 先生の音声を聞いたあと、同じ発音で読んでください。" for index in range(1, 6)]
+    ) if language_subject else ""
 
     return {
         "mode": action_mode,
@@ -3749,6 +3774,8 @@ def fallback_textbook_preview(thread, user_id, source_material):
         "common_mistakes": "似た言葉や処理の違いを混同しないように注意します。",
         "check_questions": "1. 今日扱った内容を自分の言葉で説明してください。",
         "application_questions": "1. 今日の内容を使って、短い例を1つ作ってください。",
+        "listening_questions": fallback_listening,
+        "pronunciation_questions": fallback_pronunciation,
         "model_answers": "自分の回答と授業内容を照らし合わせて確認してください。",
         "detailed_explanations": "分からない部分は、教科書詳細の「先生に質問する」から授業へ戻れます。",
         "related_textbooks": "",
@@ -3827,6 +3854,10 @@ def create_textbook_preview(thread, user_id, source_note=""):
 - code_example はプログラミングなら実際のコードを書く。プログラミング以外なら、式・例文・問題例を書く。
 - code_walkthrough はコードや例を一行ずつ、なぜ必要かまで説明する。
 - 科目に合わせて最適な教材を選ぶ。英語・韓国語・中国語・日本語なら単語問題、リスニング、発音、シャドーイング向け例文を入れる。
+- 英語・韓国語・中国語・日本語などの言語教材では、listening_questions にリスニング用問題を必ず10問作る。
+- 言語教材では、pronunciation_questions に発音問題を必ず5問作る。
+- 言語教材の音声対象は listening_questions と pronunciation_questions だけにする。他の説明・例文・本文へ音声を付ける前提で書かない。
+- 言語以外の教材では listening_questions と pronunciation_questions は空欄でよい。
 - 数学なら、式だけでなくグラフ、図形、数直線、表、途中式の流れを visual_diagram に入れる。
 - プログラミングなら、フローチャート、コード図解、入力→処理→出力、データの流れを visual_diagram と code_example に入れる。
 - 教材は多ければ良いわけではない。読者の理解度と会話内容から、一番理解しやすい形を選ぶ。
@@ -3857,6 +3888,8 @@ def create_textbook_preview(thread, user_id, source_note=""):
   "common_mistakes": "",
   "check_questions": "",
   "application_questions": "",
+  "listening_questions": "",
+  "pronunciation_questions": "",
   "model_answers": "",
   "detailed_explanations": "",
   "related_textbooks": "",
@@ -3956,6 +3989,8 @@ def confirm_textbook_preview(payload, user_id):
                 common_mistakes=payload.common_mistakes,
                 check_questions=payload.check_questions,
                 application_questions=payload.application_questions,
+                listening_questions=payload.listening_questions,
+                pronunciation_questions=payload.pronunciation_questions,
                 model_answers=payload.model_answers,
                 detailed_explanations=payload.detailed_explanations,
                 related_textbooks=payload.related_textbooks
@@ -6385,6 +6420,9 @@ Study PASの基本方針:
 - 「前にこの科目をやった日」「久しぶりかどうか」「テストまでの日数」が分かる時は、自然に学習ペースへ反映してください。
 - 教科や内容に合わせて教材を選んでください。文章だけで説明するより、音声・図・グラフ・コード図解・データの流れの方が理解しやすい場合は、その教材を優先してください。
 - 英語・韓国語・中国語・日本語学習では、単語問題、リスニング、発音練習、シャドーイング、ディクテーションを必要に応じて使ってください。ただし音声対象は問題や単語問題に絞ってください。
+- 普段の会話では、英語や例文が含まれていても音声を自動で付ける前提にしないでください。
+- ユーザーが「この英文を音声で聞きたい」「この単語を読んで」のように明確に頼んだ時だけ、音声で聞かせたい文を「音声用: ...」として1〜3文に絞って返してください。
+- 言語教材を作る時は、音声が必要な内容をリスニング用問題と発音問題に分けてください。
 - 数学では、式だけでなく、グラフ、図形、数直線、表、途中式の流れを使ってください。
 - プログラミングでは、フローチャート、コード図解、入力→処理→出力、データの流れを使ってください。
 - 教材を一度に詰め込みすぎず、その場で一番理解しやすい教材を1つ選んでください。

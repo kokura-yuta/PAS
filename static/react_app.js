@@ -157,6 +157,8 @@
     ];
 
     const LANGUAGE_AUDIO_SECTION_PATTERN = /理解確認|応用問題|問題|例題|練習|クイズ|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT/i;
+    const LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN = /リスニング用問題|リスニング問題|発音問題|発音練習/i;
+    const LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN = /音声用|再生用|読み上げ用/i;
     const LANGUAGE_AUDIO_TEXT_PATTERN = /問題|例題|練習|クイズ|単語問題|語彙問題|Vocabulary|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT|次の.*訳|次の.*読|次の.*選/i;
     const LANGUAGE_AUDIO_LINE_MARKER_PATTERN = /^(Q|Question|問|問題|No\.|[0-9０-９]+[.)．、]|[①②③④⑤⑥⑦⑧⑨⑩]|[A-DＡ-Ｄア-エ][.)．、])/i;
 
@@ -212,7 +214,7 @@
         return null;
     }
 
-    function detectLanguageTarget(text, contextLabel) {
+    function detectLanguageTarget(text, contextLabel, sourceType) {
         const contextLanguage = getLanguageContext(contextLabel);
         const textLanguage = detectLanguageFromText(text);
         const language = contextLanguage || (
@@ -225,11 +227,11 @@
             return null;
         }
 
-        if (!isLanguageExerciseAudioContext(text, contextLabel)) {
+        if (!isLanguageExerciseAudioContext(text, contextLabel, sourceType)) {
             return null;
         }
 
-        const speechText = extractLanguageAudioText(text, language, contextLabel);
+        const speechText = extractLanguageAudioText(text, language, contextLabel, sourceType);
 
         if (!speechText) {
             return null;
@@ -242,9 +244,17 @@
         };
     }
 
-    function isLanguageExerciseAudioContext(text, contextLabel) {
+    function isLanguageExerciseAudioContext(text, contextLabel, sourceType) {
         const context = String(contextLabel || "");
         const value = String(text || "");
+
+        if (sourceType === "textbook") {
+            return LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN.test(context);
+        }
+
+        if (sourceType === "chat") {
+            return LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value);
+        }
 
         return LANGUAGE_AUDIO_SECTION_PATTERN.test(context) || LANGUAGE_AUDIO_TEXT_PATTERN.test(value);
     }
@@ -282,9 +292,12 @@
         return language.textPattern.test(line);
     }
 
-    function extractLanguageAudioText(text, language, contextLabel) {
+    function extractLanguageAudioText(text, language, contextLabel, sourceType) {
         const value = String(text || "");
-        const contextIsExerciseSection = LANGUAGE_AUDIO_SECTION_PATTERN.test(String(contextLabel || ""));
+        const context = String(contextLabel || "");
+        const contextIsExerciseSection = sourceType === "textbook"
+            ? LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN.test(context)
+            : LANGUAGE_AUDIO_SECTION_PATTERN.test(context);
         const rawLines = value
             .split("\n")
             .map(function (line) {
@@ -305,7 +318,17 @@
                     return false;
                 }
 
-                if (!contextIsExerciseSection) {
+                if (sourceType === "chat") {
+                    const nearbyInstruction = [
+                        rawLines[index - 2] || "",
+                        rawLines[index - 1] || "",
+                        line
+                    ].join(" ");
+
+                    if (!LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(nearbyInstruction)) {
+                        return false;
+                    }
+                } else if (!contextIsExerciseSection) {
                     const nearbyInstruction = [
                         rawLines[index - 2] || "",
                         rawLines[index - 1] || "",
@@ -408,6 +431,7 @@
         const text = props.text || "";
         const contextLabel = props.contextLabel || "";
         const label = props.label || "音声";
+        const sourceType = props.sourceType || "auto";
         const [status, setStatus] = useState("idle");
         const [rate, setRate] = useState("1");
         const [error, setError] = useState("");
@@ -418,7 +442,7 @@
         const [recognitionStatus, setRecognitionStatus] = useState("idle");
         const audioIdRef = useRef(`language-audio-${Math.random().toString(36).slice(2)}`);
         const recognitionRef = useRef(null);
-        const target = detectLanguageTarget(text, contextLabel);
+        const target = detectLanguageTarget(text, contextLabel, sourceType);
 
         useEffect(function () {
             function handleAudioStart(event) {
@@ -1961,7 +1985,8 @@
                                         h(LanguageAudioTools, {
                                             text: section.content,
                                             contextLabel: audioContext,
-                                            label: "音声で聞く"
+                                            label: "音声で聞く",
+                                            sourceType: "textbook"
                                         })
                                     )
                             );
@@ -2406,6 +2431,8 @@
                         common_mistakes: textbookPreview.common_mistakes || "",
                         check_questions: textbookPreview.check_questions || "",
                         application_questions: textbookPreview.application_questions || "",
+                        listening_questions: textbookPreview.listening_questions || "",
+                        pronunciation_questions: textbookPreview.pronunciation_questions || "",
                         model_answers: textbookPreview.model_answers || "",
                         detailed_explanations: textbookPreview.detailed_explanations || "",
                         related_textbooks: textbookPreview.related_textbooks || "",
@@ -2610,7 +2637,8 @@
                                     ? h(LanguageAudioTools, {
                                         text: messageText,
                                         contextLabel: audioContext,
-                                        label: "音声"
+                                        label: "音声",
+                                        sourceType: "chat"
                                     })
                                     : null
                             );
@@ -2661,7 +2689,9 @@
                             "key_points",
                             "personal_points",
                             "check_questions",
-                            "application_questions"
+                            "application_questions",
+                            "listening_questions",
+                            "pronunciation_questions"
                         ].map(function (field) {
                             const labels = {
                                 introduction: "導入",
@@ -2673,7 +2703,9 @@
                                 key_points: "ここだけは覚えよう",
                                 personal_points: "あなた専用ポイント",
                                 check_questions: "理解確認問題",
-                                application_questions: "応用問題"
+                                application_questions: "応用問題",
+                                listening_questions: "リスニング用問題",
+                                pronunciation_questions: "発音問題"
                             };
                             return textbookPreview[field]
                                 ? h(
