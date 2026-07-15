@@ -34,6 +34,7 @@
 
 body:has(.study-app) {
     background: #f7f5f0;
+    overflow-x: hidden;
 }
 
 .study-app .eyebrow {
@@ -879,6 +880,48 @@ body:has(.study-app) {
 
 .study-textbook-page {
     gap: 20px;
+    width: 100%;
+    overflow-x: hidden;
+}
+
+.study-textbook-page > * {
+    min-width: 0;
+}
+
+.study-textbook-page .textbook-meta-card {
+    order: 1;
+}
+
+.study-textbook-page .textbook-toc {
+    order: 2;
+}
+
+.study-textbook-page .textbook-reader {
+    order: 3;
+}
+
+.study-textbook-page .answer-submit-card {
+    order: 4;
+}
+
+.study-textbook-page .assessment-result-card {
+    order: 5;
+}
+
+.study-textbook-page .assessment-history {
+    order: 6;
+}
+
+.study-textbook-page .textbook-updates {
+    order: 7;
+}
+
+.study-textbook-page .understanding-panel {
+    order: 8;
+}
+
+.study-textbook-page .review-plan-card {
+    order: 9;
 }
 
 .library-header {
@@ -1915,7 +1958,9 @@ body:has(.study-app) {
 
 @media (max-width: 640px) {
     .study-app {
-        padding: 28px 20px 112px;
+        width: 100%;
+        max-width: 100%;
+        padding: 28px 16px 112px;
     }
 
     .study-home {
@@ -1972,8 +2017,8 @@ body:has(.study-app) {
     }
 
     .study-chat-header {
-        margin: -28px -20px 0;
-        padding: 20px;
+        margin: -28px -16px 0;
+        padding: 20px 16px;
     }
 
     .study-chat-header h1 {
@@ -1981,18 +2026,19 @@ body:has(.study-app) {
     }
 
     .study-textbook-page .study-chat-header {
-        margin: -28px -20px -6px;
-        padding: 12px 14px 10px;
+        margin: -28px -16px -4px;
+        padding: 12px 16px 10px;
     }
 
     .study-textbook-page .library-header {
-        grid-template-columns: 46px minmax(0, 1fr) 46px;
+        grid-template-columns: 44px minmax(0, 1fr) 44px;
     }
 
     .study-textbook-page .textbook-title-block h1 {
-        max-width: 320px;
-        font-size: 22px;
-        line-height: 1.16;
+        max-width: min(100%, 320px);
+        font-size: clamp(22px, 6.2vw, 27px);
+        line-height: 1.18;
+        -webkit-line-clamp: 4;
     }
 
     .study-context {
@@ -2085,13 +2131,40 @@ body:has(.study-app) {
     }
 
     .textbook-toc {
-        padding: 18px;
-        border-radius: 22px;
+        padding: 16px;
+        border-radius: 20px;
+    }
+
+    .textbook-toc h2 {
+        font-size: 20px;
+    }
+
+    .textbook-toc-list {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .textbook-toc-list button {
+        gap: 8px;
+        padding: 10px;
+        border-radius: 14px;
+    }
+
+    .textbook-toc-list span,
+    .textbook-chapter-heading span {
+        width: 28px;
+        height: 28px;
+        font-size: 11px;
+    }
+
+    .textbook-toc-list strong {
+        font-size: 14px;
+        line-height: 1.4;
     }
 
     .textbook-reader {
-        padding: 18px;
-        border-radius: 22px;
+        gap: 14px;
+        padding: 16px;
+        border-radius: 20px;
     }
 
     .understanding-panel,
@@ -2100,21 +2173,33 @@ body:has(.study-app) {
     .assessment-history,
     .review-plan-card,
     .roadmap-card {
-        padding: 18px;
-        border-radius: 22px;
+        gap: 12px;
+        padding: 16px;
+        border-radius: 20px;
     }
 
     .understanding-summary {
-        grid-template-columns: 1fr;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+    }
+
+    .understanding-summary > div {
+        padding: 12px;
+        border-radius: 15px;
     }
 
     .understanding-summary strong {
-        font-size: 31px;
+        font-size: 26px;
     }
 
     .item-understanding {
-        grid-template-columns: 1fr auto;
+        grid-template-columns: minmax(0, 1fr) auto;
         gap: 7px 10px;
+        padding: 10px 11px;
+    }
+
+    .item-understanding strong {
+        font-size: 16px;
     }
 
     .item-understanding small {
@@ -2126,20 +2211,24 @@ body:has(.study-app) {
     }
 
     .answer-form textarea {
-        min-height: 108px;
-        max-height: 28svh;
+        min-height: 96px;
+        max-height: 24svh;
     }
 
     .answer-problem-preview pre {
-        max-height: 112px;
+        max-height: 42svh;
+        font-size: 14px;
     }
 
     .review-suggestion-list article {
         display: grid;
+        gap: 10px;
+        padding: 12px;
     }
 
     .review-suggestion-list button {
         width: 100%;
+        min-height: 36px;
     }
 
     .roadmap-item {
@@ -2159,6 +2248,22 @@ body:has(.study-app) {
     .textbook-section h2,
     .textbook-updates h2 {
         font-size: 18px;
+    }
+
+    .textbook-section {
+        padding-bottom: 15px;
+    }
+
+    .textbook-section p,
+    .textbook-updates p {
+        font-size: 16px;
+        line-height: 1.85;
+    }
+
+    .textbook-code-block,
+    .textbook-diagram-block {
+        padding: 13px;
+        font-size: 13px;
     }
 
     .textbook-preview-card {
