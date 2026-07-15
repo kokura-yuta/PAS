@@ -35,7 +35,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-2")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-3")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -1147,6 +1147,143 @@ def serialize_study_context(thread):
         "deadline": thread.deadline or "",
         "status_line": status_line
     }
+
+
+def collect_study_learning_snapshot(db, thread):
+    subject = normalize_subject_title(thread.title) or "学習相談"
+
+    textbooks = (
+        db.query(StudyTextbook)
+        .filter(StudyTextbook.user_id == thread.user_id)
+        .filter(StudyTextbook.subject == subject)
+        .order_by(StudyTextbook.updated_at.desc().nullslast(), StudyTextbook.created_at.desc())
+        .limit(5)
+        .all()
+    )
+    textbook_count = (
+        db.query(StudyTextbook)
+        .filter(StudyTextbook.user_id == thread.user_id)
+        .filter(StudyTextbook.subject == subject)
+        .count()
+    )
+    understandings = (
+        db.query(StudyUnderstanding)
+        .filter(StudyUnderstanding.user_id == thread.user_id)
+        .filter(StudyUnderstanding.subject == subject)
+        .order_by(StudyUnderstanding.updated_at.desc())
+        .all()
+    )
+    roadmap_items = []
+
+    if not is_roadmap_deleted(db, thread.user_id, subject, thread.id):
+        roadmap_items = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == thread.user_id)
+            .filter(StudyRoadmapItem.subject == subject)
+            .filter(or_(StudyRoadmapItem.thread_id == thread.id, StudyRoadmapItem.thread_id.is_(None)))
+            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+            .all()
+        )
+
+    subject_understanding = next(
+        (
+            item
+            for item in understandings
+            if item.scope_type == "subject"
+        ),
+        None
+    )
+    current_item = choose_roadmap_focus_item(roadmap_items)
+    next_item = next(
+        (
+            item
+            for item in roadmap_items
+            if normalize_roadmap_status(item.status) == "not_started"
+        ),
+        None
+    )
+    completed_count = len([
+        item
+        for item in roadmap_items
+        if normalize_roadmap_status(item.status) == "learned"
+    ])
+    total_count = len(roadmap_items)
+    progress_percent = round((completed_count / total_count) * 100) if total_count else 0
+    lesson_state = (
+        db.query(StudyLessonState)
+        .filter(StudyLessonState.user_id == thread.user_id)
+        .filter(StudyLessonState.thread_id == thread.id)
+        .first()
+    )
+    weak_memory = (
+        db.query(Memory)
+        .filter(Memory.user_id == thread.user_id)
+        .filter(Memory.is_active.is_(True))
+        .filter(or_(Memory.status == "confirmed", Memory.status.is_(None)))
+        .filter(Memory.category == "weak_area")
+        .order_by(Memory.created_at.desc())
+        .limit(12)
+        .all()
+    )
+    subject_weak_memory = next(
+        (
+            memory
+            for memory in weak_memory
+            if subject in (memory.content or "")
+        ),
+        None
+    )
+    weak_note = ""
+
+    if lesson_state and lesson_state.weak_points:
+        weak_note = lesson_state.weak_points
+    elif subject_weak_memory:
+        weak_note = subject_weak_memory.content or ""
+
+    latest_textbook = textbooks[0] if textbooks else None
+
+    if roadmap_items:
+        roadmap_status_line = (
+            f"現在地は「{current_item.title}」です。"
+            if current_item
+            else "ロードマップは作成済みです。"
+        )
+    else:
+        roadmap_status_line = "ロードマップはまだありません。必要なら会話から作成できます。"
+
+    next_suggestion = ""
+
+    if current_item:
+        next_suggestion = f"{current_item.title}から続ける"
+    elif next_item:
+        next_suggestion = f"{next_item.title}へ進む"
+    elif latest_textbook:
+        next_suggestion = f"教科書「{latest_textbook.title}」を復習する"
+    else:
+        next_suggestion = "まず学びたい内容を一緒に決める"
+
+    return {
+        "roadmap_status_line": roadmap_status_line,
+        "roadmap_current": current_item.title if current_item else "",
+        "roadmap_next": next_item.title if next_item else "",
+        "roadmap_progress_percent": progress_percent,
+        "roadmap_total_count": total_count,
+        "roadmap_completed_count": completed_count,
+        "latest_textbook_title": latest_textbook.title if latest_textbook else "",
+        "textbook_count": textbook_count,
+        "understanding_percent": subject_understanding.percent if subject_understanding else 0,
+        "weak_note": truncate_text(weak_note, 120),
+        "next_suggestion": next_suggestion
+    }
+
+
+def load_study_learning_snapshot(thread):
+    db = SessionLocal()
+
+    try:
+        return collect_study_learning_snapshot(db, thread)
+    finally:
+        db.close()
 
 
 def format_study_day_label(days_since_last):
@@ -3144,6 +3281,7 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
         lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
         lesson_signal = apply_lesson_message_signal(db, lesson_state, latest_message)
         lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
+        learning_snapshot = collect_study_learning_snapshot(db, thread)
 
         intent_text = "今回のロードマップ指示: なし"
 
@@ -3212,6 +3350,16 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 理解度:
 {format_understandings_for_prompt(understandings)}
 
+先生が参照している学習状態:
+- ロードマップ状態: {learning_snapshot["roadmap_status_line"]}
+- 現在地: {learning_snapshot["roadmap_current"] or "未設定"}
+- 次のおすすめ: {learning_snapshot["roadmap_next"] or learning_snapshot["next_suggestion"]}
+- ロードマップ進捗: {learning_snapshot["roadmap_progress_percent"]}%
+- 最新教科書: {learning_snapshot["latest_textbook_title"] or "まだありません"}
+- 教科書数: {learning_snapshot["textbook_count"]}冊
+- 科目理解度: {learning_snapshot["understanding_percent"]}%
+- 苦手・つまずき: {learning_snapshot["weak_note"] or "まだ少ない"}
+
 授業中の進行状態:
 {format_lesson_state_for_prompt(lesson_state)}
 {lesson_signal}
@@ -3220,6 +3368,7 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 - 返答の最初に、現在地・前回状況・今日扱う内容を1〜2文で自然に伝えてください。
 - ロードマップがある場合は、現在地または次のおすすめから始めてください。
 - 教科書や理解度がある場合は、一般論ではなく「このユーザーの続き」として授業してください。
+- 苦手・つまずきがある場合は、決めつけずに「前にここが少し曖昧だったね」のように自然に使ってください。
 - 返答の最後に、次に進むか、理解確認するか、教科書に残すかを1つだけ自然に提案してください。
 
 ロードマップ利用ルール:
@@ -5749,7 +5898,10 @@ def serialize_thread(thread):
     }
 
     if thread.thread_type == STUDY_THREAD_TYPE:
-        thread_data["study_context"] = serialize_study_context(thread)
+        thread_data["study_context"] = {
+            **serialize_study_context(thread),
+            **load_study_learning_snapshot(thread)
+        }
 
     return thread_data
 

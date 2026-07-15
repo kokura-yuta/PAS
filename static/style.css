@@ -628,6 +628,40 @@ body:has(.study-app) {
     font-weight: 750;
 }
 
+.study-insight-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    margin-top: 14px;
+}
+
+.study-insight-grid article {
+    min-width: 0;
+    padding: 12px;
+    border: 1px solid rgba(21, 23, 25, 0.08);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.64);
+}
+
+.study-insight-grid span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--study-muted);
+    font-size: 11px;
+    font-weight: 800;
+}
+
+.study-insight-grid strong {
+    display: -webkit-box;
+    overflow: hidden;
+    color: var(--study-text);
+    font-size: 13px;
+    font-weight: 850;
+    line-height: 1.45;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+
 .lesson-actions {
     display: flex;
     flex-wrap: nowrap;

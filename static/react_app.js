@@ -1888,6 +1888,10 @@
         const context = thread && thread.study_context ? thread.study_context : {};
         const lessonActions = [
             {
+                label: "ロードマップ通り",
+                message: "ロードマップ通りに進もう。現在地から授業を始めてください。"
+            },
+            {
                 label: "理解確認",
                 message: "ここまでの内容で、理解確認の問題を1問だけ出してください。"
             },
@@ -1902,6 +1906,10 @@
             {
                 label: "今日はここまで",
                 message: "今日はここまでにします。学習レポートとして、今日できたこと、まだ曖昧なこと、次回やることを短くまとめてください。"
+            },
+            {
+                label: "苦手を整理",
+                message: "今までの会話から、僕がつまずいているところを短く整理して、次に何を復習すべきか教えてください。"
             }
         ];
 
@@ -1945,6 +1953,34 @@
                         h("span", null, `連続 ${context.streak_count || 0}日`),
                         context.test_date ? h("span", null, `テスト ${context.test_date}`) : null,
                         context.deadline ? h("span", null, `提出 ${context.deadline}`) : null
+                    ),
+                    h(
+                        "div",
+                        { className: "study-insight-grid" },
+                        h(
+                            "article",
+                            null,
+                            h("span", null, "現在地"),
+                            h("strong", null, context.roadmap_current || context.roadmap_status_line || "未設定")
+                        ),
+                        h(
+                            "article",
+                            null,
+                            h("span", null, "次の一歩"),
+                            h("strong", null, context.roadmap_next || context.next_suggestion || "一緒に決める")
+                        ),
+                        h(
+                            "article",
+                            null,
+                            h("span", null, "教科書"),
+                            h("strong", null, context.latest_textbook_title || "まだありません")
+                        ),
+                        h(
+                            "article",
+                            null,
+                            h("span", null, "苦手メモ"),
+                            h("strong", null, context.weak_note || "まだ少ない")
+                        )
                     )
                 )
                 : null,
