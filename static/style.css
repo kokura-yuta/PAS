@@ -968,6 +968,17 @@ body:has(.study-app) {
     cursor: pointer;
 }
 
+.roadmap-subject-head .roadmap-delete-button {
+    background: rgba(138, 74, 56, 0.08);
+    color: #8a4a38;
+    border: 1px solid rgba(138, 74, 56, 0.18);
+}
+
+.roadmap-subject-head .roadmap-delete-button:disabled {
+    cursor: wait;
+    opacity: 0.72;
+}
+
 .roadmap-summary-pills {
     display: flex;
     flex-wrap: wrap;

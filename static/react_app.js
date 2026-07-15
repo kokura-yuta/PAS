@@ -563,24 +563,29 @@
     function RoadmapsScreen({ navigate }) {
         const [data, setData] = useState(null);
         const [error, setError] = useState("");
+        const [deletingKey, setDeletingKey] = useState("");
 
-        useEffect(function () {
-            let active = true;
-
+        function loadRoadmaps(activeRef) {
             api("/api/roadmaps")
                 .then(function (response) {
-                    if (active) {
+                    if (!activeRef || activeRef.active) {
                         setData(response);
                     }
                 })
                 .catch(function () {
-                    if (active) {
+                    if (!activeRef || activeRef.active) {
                         setError("ロードマップを読み込めませんでした。");
                     }
                 });
+        }
+
+        useEffect(function () {
+            const activeRef = { active: true };
+
+            loadRoadmaps(activeRef);
 
             return function () {
-                active = false;
+                activeRef.active = false;
             };
         }, []);
 
@@ -599,6 +604,44 @@
             }
 
             navigate(subject.bookshelf_url, { message: "本棚を開いています" });
+        }
+
+        async function deleteRoadmap(subject) {
+            const currentItem = subject.current_item ? `現在地「${subject.current_item.title}」` : "現在地";
+            const nextItem = subject.next_item ? `次のおすすめ「${subject.next_item.title}」` : "次のおすすめ";
+            const confirmed = window.confirm(
+                `${subject.subject}のロードマップを削除しますか？\n\n削除すると、学習目標・${currentItem}・進捗・${nextItem}・AIが参照しているロードマップ情報もMemoryから外します。\n\n教科書・理解度・添削結果は残ります。`
+            );
+
+            if (!confirmed) {
+                return;
+            }
+
+            setDeletingKey(subject.subject);
+            setError("");
+
+            try {
+                await api("/api/roadmaps", {
+                    method: "DELETE",
+                    body: JSON.stringify({
+                        subject: subject.subject,
+                        thread_id: subject.thread_id || null
+                    })
+                });
+                setData(function (currentData) {
+                    const currentSubjects = currentData && currentData.subjects ? currentData.subjects : [];
+
+                    return {
+                        subjects: currentSubjects.filter(function (item) {
+                            return item.subject !== subject.subject;
+                        })
+                    };
+                });
+            } catch (err) {
+                setError("ロードマップを削除できませんでした。もう一度試してください。");
+            } finally {
+                setDeletingKey("");
+            }
         }
 
         return h(
@@ -662,6 +705,18 @@
                                             }
                                         },
                                         "授業へ"
+                                    ),
+                                    h(
+                                        "button",
+                                        {
+                                            type: "button",
+                                            className: "roadmap-delete-button",
+                                            disabled: deletingKey === subject.subject,
+                                            onClick: function () {
+                                                deleteRoadmap(subject);
+                                            }
+                                        },
+                                        deletingKey === subject.subject ? h(LoadingLabel, { text: "削除中" }) : "削除"
                                     )
                                 ),
                                 h(
@@ -1679,11 +1734,30 @@
                 return;
             }
 
-            if (!window.confirm(`${chatData.thread.title}を削除しますか？`)) {
+            let deleteRoadmap = false;
+
+            if (chatData.thread.has_roadmap) {
+                deleteRoadmap = window.confirm(
+                    `この会話には${chatData.thread.title}のロードマップが紐づいています。\n\nOK: 会話とロードマップを削除\nキャンセル: 次に会話だけ削除するか確認`
+                );
+
+                if (!deleteRoadmap) {
+                    const deleteOnlyThread = window.confirm(
+                        `${chatData.thread.title}の会話だけ削除しますか？\n\nロードマップ・教科書・理解度・Memoryは残ります。`
+                    );
+
+                    if (!deleteOnlyThread) {
+                        return;
+                    }
+                }
+            } else if (!window.confirm(`${chatData.thread.title}を削除しますか？`)) {
                 return;
             }
 
-            await api(`/api/chat_threads/${chatData.thread.id}`, { method: "DELETE" });
+            await api(
+                `/api/chat_threads/${chatData.thread.id}${deleteRoadmap ? "?delete_roadmap=true" : ""}`,
+                { method: "DELETE" }
+            );
             navigate("/", { direction: "back", message: "ホームへ戻っています" });
         }
 

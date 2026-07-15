@@ -35,7 +35,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260712-1")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-1")[:12]
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -96,6 +96,13 @@ ROADMAP_SKIP_WORDS = [
     "スキップ",
     "ここは飛ば",
     "この単元は飛ば"
+]
+ROADMAP_CREATE_WORDS = [
+    "作成",
+    "作って",
+    "作る",
+    "作りたい",
+    "作ろう"
 ]
 LESSON_LEVEL_ORDER = [
     "term",
@@ -167,6 +174,11 @@ class ChatThreadCreatePayload(BaseModel):
 
 class ChatMessageCreatePayload(BaseModel):
     message: str = ""
+
+
+class RoadmapDeletePayload(BaseModel):
+    subject: str = ""
+    thread_id: int | None = None
 
 
 class TextbookPreviewPayload(BaseModel):
@@ -554,6 +566,17 @@ class StudyRoadmapItem(Base):
     updated_at = Column(DateTime, default=app_now, onupdate=app_now)
 
 
+class StudyRoadmapDeletion(Base):
+    __tablename__ = "study_roadmap_deletions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    thread_id = Column(Integer, index=True)
+    subject = Column(String(100), index=True)
+    deleted_goal = Column(Text)
+    created_at = Column(DateTime, default=app_now)
+
+
 class StudyLessonState(Base):
     __tablename__ = "study_lesson_states"
 
@@ -636,6 +659,7 @@ def ensure_user_id_columns():
         "study_understandings",
         "study_assessments",
         "study_roadmap_items",
+        "study_roadmap_deletions",
         "study_lesson_states",
         "password_reset_tokens"
     ]
@@ -970,6 +994,7 @@ def claim_unowned_data(user_id):
         "study_understandings",
         "study_assessments",
         "study_roadmap_items",
+        "study_roadmap_deletions",
         "study_lesson_states"
     ]
 
@@ -1827,12 +1852,51 @@ def get_roadmap_status_label(status):
     return ROADMAP_STATUS_LABELS.get(normalize_roadmap_status(status), "未学習")
 
 
+def roadmap_deletion_filter(query, thread_id):
+    if thread_id is None:
+        return query.filter(StudyRoadmapDeletion.thread_id.is_(None))
+
+    return query.filter(
+        or_(
+            StudyRoadmapDeletion.thread_id == thread_id,
+            StudyRoadmapDeletion.thread_id.is_(None)
+        )
+    )
+
+
+def is_roadmap_deleted(db, user_id, subject, thread_id=None):
+    clean_subject = normalize_subject_title(subject) or "学習相談"
+    query = (
+        db.query(StudyRoadmapDeletion)
+        .filter(StudyRoadmapDeletion.user_id == user_id)
+        .filter(StudyRoadmapDeletion.subject == clean_subject)
+    )
+
+    return roadmap_deletion_filter(query, thread_id).first() is not None
+
+
+def clear_roadmap_deletion_marker(db, user_id, subject, thread_id=None):
+    clean_subject = normalize_subject_title(subject) or "学習相談"
+    query = (
+        db.query(StudyRoadmapDeletion)
+        .filter(StudyRoadmapDeletion.user_id == user_id)
+        .filter(StudyRoadmapDeletion.subject == clean_subject)
+    )
+    roadmap_deletion_filter(query, thread_id).delete(synchronize_session=False)
+
+
 def is_roadmap_follow_message(message):
     return contains_any_word(message, ROADMAP_FOLLOW_WORDS)
 
 
 def is_roadmap_skip_message(message):
     return contains_any_word(message, ROADMAP_SKIP_WORDS)
+
+
+def is_roadmap_create_message(message):
+    text_value = message or ""
+    has_roadmap_word = "ロードマップ" in text_value or "学習計画" in text_value
+    return has_roadmap_word and contains_any_word(text_value, ROADMAP_CREATE_WORDS)
 
 
 def choose_roadmap_focus_item(roadmap_items):
@@ -1994,6 +2058,9 @@ def generate_roadmap_items_with_ai(subject, textbooks, understandings):
 
 
 def load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread_id=None):
+    if is_roadmap_deleted(db, user_id, subject, thread_id):
+        return []
+
     base_query = (
         db.query(StudyRoadmapItem)
         .filter(StudyRoadmapItem.user_id == user_id)
@@ -2090,6 +2157,165 @@ def reset_study_roadmap_for_thread(db, thread):
         item.updated_at = app_now()
 
     db.query(StudyLessonState).filter(StudyLessonState.user_id == thread.user_id).filter(StudyLessonState.thread_id == thread.id).delete()
+
+
+def build_roadmap_goal_summary(subject, roadmap_items):
+    item_titles = [
+        item.title
+        for item in roadmap_items
+        if item.title
+    ]
+
+    if not item_titles:
+        return f"{subject}のロードマップ"
+
+    return f"{subject}: " + " / ".join(item_titles[:6])
+
+
+def deactivate_roadmap_goal_memories(db, user_id, subject, roadmap_items):
+    clean_subject = normalize_subject_title(subject) or "学習相談"
+    item_titles = [
+        (item.title or "").strip()
+        for item in roadmap_items
+        if (item.title or "").strip()
+    ]
+    roadmap_terms = ["ロードマップ", "進捗", "現在地", "次のおすすめ", "学習順序", "未学習", "学習中"]
+    goal_terms = ["学習目標", "目標", "マスター", "できるよう", "勉強したい", "学びたい", "進めたい"]
+
+    candidate_memories = (
+        db.query(Memory)
+        .filter(Memory.user_id == user_id)
+        .filter(Memory.is_active.is_(True))
+        .filter(Memory.category.in_(["goal", "learning_goal", "roadmap_goal", "roadmap_progress", "roadmap_context"]))
+        .all()
+    )
+
+    deactivated_count = 0
+
+    for memory in candidate_memories:
+        content = memory.content or ""
+        category = memory.category or ""
+        has_subject = clean_subject in content
+        has_item_title = any(title and title in content for title in item_titles)
+        has_roadmap_term = any(term in content for term in roadmap_terms)
+        has_goal_term = any(term in content for term in goal_terms)
+
+        should_deactivate = False
+
+        if category.startswith("roadmap_"):
+            should_deactivate = has_subject or has_item_title or has_roadmap_term or has_goal_term
+        elif category == "learning_goal":
+            should_deactivate = has_subject or has_item_title or has_roadmap_term or has_goal_term
+        elif category == "goal":
+            should_deactivate = (has_subject or has_item_title) and (has_roadmap_term or has_goal_term)
+
+        if should_deactivate:
+            memory.is_active = False
+            deactivated_count += 1
+
+    return deactivated_count
+
+
+def detach_roadmap_from_thread(db, thread):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return
+
+    subject = normalize_subject_title(thread.title) or thread.title
+
+    (
+        db.query(StudyRoadmapItem)
+        .filter(StudyRoadmapItem.user_id == thread.user_id)
+        .filter(StudyRoadmapItem.subject == subject)
+        .filter(StudyRoadmapItem.thread_id == thread.id)
+        .update({"thread_id": None}, synchronize_session=False)
+    )
+    (
+        db.query(StudyLessonState)
+        .filter(StudyLessonState.user_id == thread.user_id)
+        .filter(StudyLessonState.thread_id == thread.id)
+        .delete(synchronize_session=False)
+    )
+
+
+def has_active_roadmap_for_thread(thread):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return False
+
+    subject = normalize_subject_title(thread.title) or thread.title
+    db = SessionLocal()
+
+    try:
+        if is_roadmap_deleted(db, thread.user_id, subject, thread.id):
+            return False
+
+        roadmap_item = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == thread.user_id)
+            .filter(StudyRoadmapItem.subject == subject)
+            .filter(or_(StudyRoadmapItem.thread_id == thread.id, StudyRoadmapItem.thread_id.is_(None)))
+            .first()
+        )
+
+        return roadmap_item is not None
+    finally:
+        db.close()
+
+
+def delete_study_roadmap(user_id, subject, thread_id=None):
+    clean_subject = normalize_subject_title(subject) or "学習相談"
+    db = SessionLocal()
+
+    try:
+        query = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == user_id)
+            .filter(StudyRoadmapItem.subject == clean_subject)
+        )
+
+        if thread_id is not None:
+            query = query.filter(or_(StudyRoadmapItem.thread_id == thread_id, StudyRoadmapItem.thread_id.is_(None)))
+
+        roadmap_items = query.all()
+        deleted_goal = build_roadmap_goal_summary(clean_subject, roadmap_items)
+        deactivated_memories = deactivate_roadmap_goal_memories(db, user_id, clean_subject, roadmap_items)
+        deleted_items = len(roadmap_items)
+
+        query.delete(synchronize_session=False)
+
+        lesson_query = (
+            db.query(StudyLessonState)
+            .filter(StudyLessonState.user_id == user_id)
+            .filter(StudyLessonState.subject == clean_subject)
+        )
+
+        if thread_id is not None:
+            lesson_query = lesson_query.filter(StudyLessonState.thread_id == thread_id)
+
+        lesson_query.delete(synchronize_session=False)
+
+        (
+            db.query(StudyUnderstanding)
+            .filter(StudyUnderstanding.user_id == user_id)
+            .filter(StudyUnderstanding.subject == clean_subject)
+            .filter(StudyUnderstanding.scope_type == "roadmap")
+            .delete(synchronize_session=False)
+        )
+
+        clear_roadmap_deletion_marker(db, user_id, clean_subject, thread_id)
+        db.add(StudyRoadmapDeletion(
+            user_id=user_id,
+            thread_id=thread_id,
+            subject=clean_subject,
+            deleted_goal=deleted_goal
+        ))
+        db.commit()
+
+        return {
+            "deleted_items": deleted_items,
+            "deactivated_memories": deactivated_memories
+        }
+    finally:
+        db.close()
 
 
 def load_bookshelf(subject, user_id):
@@ -2197,6 +2423,10 @@ def load_roadmap_overview(user_id):
                 understandings,
                 thread_ids.get(subject)
             )
+
+            if not roadmap_items:
+                continue
+
             subject_understanding = next(
                 (
                     item
@@ -2224,6 +2454,7 @@ def load_roadmap_overview(user_id):
 
             roadmaps.append({
                 "subject": subject,
+                "thread_id": thread_ids.get(subject),
                 "chat_url": chat_urls.get(subject, ""),
                 "bookshelf_url": f"/bookshelf/{quote(subject)}",
                 "understanding_percent": subject_understanding.percent if subject_understanding else 0,
@@ -2505,24 +2736,36 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
             .all()
         )
 
-        load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread.id)
-        roadmap_items = (
-            db.query(StudyRoadmapItem)
-            .filter(StudyRoadmapItem.user_id == user_id)
-            .filter(StudyRoadmapItem.subject == subject)
-            .filter(StudyRoadmapItem.thread_id == thread.id)
-            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
-            .all()
-        )
-        roadmap_intent = apply_roadmap_message_intent(db, roadmap_items, latest_message)
-        roadmap_items = (
-            db.query(StudyRoadmapItem)
-            .filter(StudyRoadmapItem.user_id == user_id)
-            .filter(StudyRoadmapItem.subject == subject)
-            .filter(StudyRoadmapItem.thread_id == thread.id)
-            .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
-            .all()
-        )
+        roadmap_deleted = is_roadmap_deleted(db, user_id, subject, thread.id)
+        roadmap_intent = {"type": "", "item_title": ""}
+        roadmap_recreated = False
+
+        if roadmap_deleted and is_roadmap_create_message(latest_message):
+            clear_roadmap_deletion_marker(db, user_id, subject, thread.id)
+            roadmap_deleted = False
+            roadmap_recreated = True
+
+        if roadmap_deleted:
+            roadmap_items = []
+        else:
+            load_or_create_roadmap(db, user_id, subject, textbooks, understandings, thread.id)
+            roadmap_items = (
+                db.query(StudyRoadmapItem)
+                .filter(StudyRoadmapItem.user_id == user_id)
+                .filter(StudyRoadmapItem.subject == subject)
+                .filter(StudyRoadmapItem.thread_id == thread.id)
+                .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+                .all()
+            )
+            roadmap_intent = apply_roadmap_message_intent(db, roadmap_items, latest_message)
+            roadmap_items = (
+                db.query(StudyRoadmapItem)
+                .filter(StudyRoadmapItem.user_id == user_id)
+                .filter(StudyRoadmapItem.subject == subject)
+                .filter(StudyRoadmapItem.thread_id == thread.id)
+                .order_by(StudyRoadmapItem.sort_order.asc(), StudyRoadmapItem.id.asc())
+                .all()
+            )
         lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
         lesson_signal = apply_lesson_message_signal(db, lesson_state, latest_message)
         lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
@@ -2540,13 +2783,27 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
                 f"「{roadmap_intent['item_title']}」を飛ばすと言っています。"
                 "今後は飛ばした単元として扱い、必要な前提だけ短く補足してください。"
             )
+        elif roadmap_recreated:
+            intent_text = (
+                "今回のロードマップ指示: ユーザーは削除後の新しいロードマップ作成を求めています。"
+                "過去に削除した目標や現在地を引き継がず、残っている教科書・理解度だけ参考にしてゼロから授業を始めてください。"
+            )
+
+        roadmap_prompt = format_roadmap_items_for_prompt(roadmap_items)
+
+        if roadmap_deleted:
+            roadmap_prompt = (
+                "この会話のロードマップはユーザーが削除済みです。"
+                "過去のロードマップの目標・現在地・進捗・次のおすすめ・スキップ単元は参照しないでください。"
+                "ユーザーが新しい目標を話した場合だけ、新しいロードマップを作成できることを提案してください。"
+            )
 
         return f"""
 学習基本情報:
 {format_study_context_for_prompt(thread)}
 
 ロードマップ:
-{format_roadmap_items_for_prompt(roadmap_items)}
+{roadmap_prompt}
 
 {intent_text}
 
@@ -3360,7 +3617,7 @@ def create_chat_thread(title, user_id, thread_type=CUSTOM_THREAD_TYPE):
         db.close()
 
 
-def delete_chat_thread(thread_id, user_id):
+def delete_chat_thread(thread_id, user_id, delete_roadmap=False):
     db = SessionLocal()
 
     try:
@@ -3374,7 +3631,11 @@ def delete_chat_thread(thread_id, user_id):
         if thread is None or thread.thread_type == DIARY_THREAD_TYPE:
             return
 
-        reset_study_roadmap_for_thread(db, thread)
+        if delete_roadmap and thread.thread_type == STUDY_THREAD_TYPE:
+            delete_study_roadmap(user_id, thread.title, thread.id)
+        else:
+            detach_roadmap_from_thread(db, thread)
+
         db.query(ChatMessage).filter(ChatMessage.user_id == user_id).filter(ChatMessage.thread_id == thread_id).delete()
         db.delete(thread)
         db.commit()
@@ -5074,7 +5335,8 @@ def serialize_thread(thread):
         "description": get_thread_description(thread.thread_type),
         "thread_type": thread.thread_type,
         "thread_type_label": get_thread_type_label(thread.thread_type),
-        "can_delete": thread.thread_type != DIARY_THREAD_TYPE
+        "can_delete": thread.thread_type != DIARY_THREAD_TYPE,
+        "has_roadmap": has_active_roadmap_for_thread(thread)
     }
 
     if thread.thread_type == STUDY_THREAD_TYPE:
@@ -5810,13 +6072,13 @@ async def api_chat_image_upload(
 
 
 @app.delete("/api/chat_threads/{thread_id}")
-def api_chat_thread_delete(request: Request, thread_id: int):
+def api_chat_thread_delete(request: Request, thread_id: int, delete_roadmap: bool = False):
     current_user = get_current_user(request)
 
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
-    delete_chat_thread(thread_id, current_user.id)
+    delete_chat_thread(thread_id, current_user.id, delete_roadmap=delete_roadmap)
     return {"ok": True}
 
 
@@ -5851,6 +6113,26 @@ def api_roadmaps(request: Request):
 
     return {
         "subjects": load_roadmap_overview(current_user.id)
+    }
+
+
+@app.delete("/api/roadmaps")
+def api_roadmap_delete(request: Request, payload: RoadmapDeletePayload):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    subject = normalize_subject_title(payload.subject)
+
+    if not subject:
+        return JSONResponse({"error": "subject_required"}, status_code=400)
+
+    result = delete_study_roadmap(current_user.id, subject, payload.thread_id)
+
+    return {
+        "ok": True,
+        "result": result
     }
 
 
@@ -6045,13 +6327,13 @@ def specialist_thread_create(request: Request, thread_type: str = Form(CUSTOM_TH
     return RedirectResponse(url=f"/chat/{thread.id}", status_code=303)
 
 @app.post("/chat_threads/{thread_id}/delete")
-def chat_thread_delete(request: Request, thread_id: int):
+def chat_thread_delete(request: Request, thread_id: int, delete_roadmap: bool = Form(False)):
     current_user = get_current_user(request)
 
     if current_user is None:
         return RedirectResponse(url="/login", status_code=303)
 
-    delete_chat_thread(thread_id, current_user.id)
+    delete_chat_thread(thread_id, current_user.id, delete_roadmap=delete_roadmap)
 
     return RedirectResponse(url="/", status_code=303)
 
