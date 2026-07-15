@@ -786,6 +786,7 @@ body:has(.study-app) {
     border-bottom-left-radius: 6px;
 }
 
+.language-audio-tools,
 .english-audio-tools {
     display: flex;
     flex-wrap: wrap;
@@ -817,8 +818,90 @@ body:has(.study-app) {
     background: rgba(21, 23, 25, 0.08);
 }
 
+.secondary-audio-button {
+    background: rgba(21, 23, 25, 0.045);
+}
+
 .audio-rate-select {
     padding: 0 10px;
+}
+
+.language-audio-label {
+    display: inline-flex;
+    align-items: center;
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 999px;
+    background: rgba(21, 23, 25, 0.055);
+    color: var(--study-muted);
+    font-size: 11px;
+    font-weight: 850;
+}
+
+.language-practice-actions {
+    flex-basis: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.language-practice-actions button,
+.language-practice-panel button {
+    min-height: 32px;
+    padding: 0 11px;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    color: var(--study-text);
+    font: inherit;
+    font-size: 12px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.language-practice-actions button:active,
+.language-practice-panel button:active {
+    transform: scale(0.98);
+}
+
+.language-practice-panel {
+    flex-basis: 100%;
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--study-line);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+.language-practice-panel p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.7;
+}
+
+.practice-target {
+    font-weight: 850;
+}
+
+.language-practice-panel textarea {
+    width: 100%;
+    min-height: 86px;
+    box-sizing: border-box;
+    padding: 12px;
+    border: 1px solid var(--study-line);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.86);
+    color: var(--study-text);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1.6;
+    resize: vertical;
+}
+
+.practice-result {
+    color: var(--study-muted);
+    font-weight: 750;
 }
 
 .audio-error {

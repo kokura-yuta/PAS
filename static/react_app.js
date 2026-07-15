@@ -125,54 +125,151 @@
         "授業の進め方を準備しています"
     ];
 
-    const ENGLISH_AUDIO_CONTEXT_PATTERN = /英語|英文|英単語|TOEIC|リスニング|シャドーイング|English|Listening/i;
+    const LANGUAGE_AUDIO_CONTEXTS = [
+        {
+            key: "english",
+            label: "英語",
+            lang: "en-US",
+            contextPattern: /英語|英文|英単語|TOEIC|リスニング|シャドーイング|English|Listening/i,
+            textPattern: /[A-Za-z][A-Za-z'’-]*/
+        },
+        {
+            key: "korean",
+            label: "韓国語",
+            lang: "ko-KR",
+            contextPattern: /韓国語|ハングル|Korean/i,
+            textPattern: /[\uAC00-\uD7AF]/
+        },
+        {
+            key: "chinese",
+            label: "中国語",
+            lang: "zh-CN",
+            contextPattern: /中国語|中文|Chinese|HSK/i,
+            textPattern: /[\u4E00-\u9FFF]/
+        },
+        {
+            key: "japanese",
+            label: "日本語",
+            lang: "ja-JP",
+            contextPattern: /日本語|Japanese|JLPT|ひらがな|カタカナ|漢字/i,
+            textPattern: /[\u3040-\u30ff\u4E00-\u9FFF]/
+        }
+    ];
 
     function isSpeechAvailable() {
         return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
     }
 
-    function looksLikeEnglishStudyContext(contextLabel) {
-        return ENGLISH_AUDIO_CONTEXT_PATTERN.test(contextLabel || "");
+    function getSpeechRecognitionConstructor() {
+        return window.SpeechRecognition || window.webkitSpeechRecognition || null;
     }
 
-    function hasEnoughEnglishText(text) {
-        const value = String(text || "");
-        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
-        const englishCharacters = words.join("").length;
+    function getLanguageContext(contextLabel) {
+        const context = contextLabel || "";
 
-        if (englishCharacters < 12 || words.length < 3) {
-            return false;
+        return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
+            return language.contextPattern.test(context);
+        }) || null;
+    }
+
+    function detectLanguageFromText(text) {
+        const value = String(text || "");
+
+        if (/[\uAC00-\uD7AF]/.test(value)) {
+            return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
+                return language.key === "korean";
+            });
         }
 
-        return true;
-    }
+        if (/[A-Za-z][A-Za-z'’-]*/.test(value)) {
+            const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+            const englishCharacters = words.join("").length;
+            const totalCharacters = value.replace(/\s/g, "").length || 1;
 
-    function looksLikeEnglishSentence(text) {
-        const value = String(text || "");
-        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
-        const englishCharacters = words.join("").length;
-        const totalCharacters = value.replace(/\s/g, "").length || 1;
-        const englishRatio = englishCharacters / totalCharacters;
-
-        return words.length >= 5 && englishRatio > 0.45;
-    }
-
-    function shouldShowEnglishAudio(text, contextLabel) {
-        if (!isSpeechAvailable() || !hasEnoughEnglishText(text)) {
-            return false;
+            if (words.length >= 3 && englishCharacters >= 12 && englishCharacters / totalCharacters > 0.35) {
+                return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
+                    return language.key === "english";
+                });
+            }
         }
 
-        return looksLikeEnglishStudyContext(contextLabel) || looksLikeEnglishSentence(text);
+        if (/[\u3040-\u30ff]/.test(value)) {
+            return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
+                return language.key === "japanese";
+            });
+        }
+
+        if (/[\u4E00-\u9FFF]/.test(value)) {
+            return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
+                return language.key === "chinese";
+            });
+        }
+
+        return null;
     }
 
-    function extractEnglishAudioText(text) {
-        const lines = String(text || "")
+    function detectLanguageTarget(text, contextLabel) {
+        const contextLanguage = getLanguageContext(contextLabel);
+        const textLanguage = detectLanguageFromText(text);
+        const language = contextLanguage || (
+            textLanguage && textLanguage.key !== "japanese"
+                ? textLanguage
+                : null
+        );
+
+        if (!language) {
+            return null;
+        }
+
+        const speechText = extractLanguageAudioText(text, language);
+
+        if (!speechText) {
+            return null;
+        }
+
+        return {
+            language: language,
+            text: speechText,
+            sentences: splitLanguageSentences(speechText, language)
+        };
+    }
+
+    function lineMatchesLanguage(line, language) {
+        if (language.key === "english") {
+            const words = line.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+            const englishCharacters = words.join("").length;
+            const totalCharacters = line.replace(/\s/g, "").length || 1;
+
+            return englishCharacters >= 2 && (words.length === 1 || englishCharacters / totalCharacters > 0.35);
+        }
+
+        if (language.key === "korean") {
+            return (line.match(/[\uAC00-\uD7AF]/g) || []).length >= 2;
+        }
+
+        if (language.key === "chinese") {
+            const chineseCharacters = (line.match(/[\u4E00-\u9FFF]/g) || []).length;
+            const japaneseKana = /[\u3040-\u30ff]/.test(line);
+
+            return chineseCharacters >= 2 && !japaneseKana;
+        }
+
+        if (language.key === "japanese") {
+            return /[\u3040-\u30ff]/.test(line) || (line.match(/[\u4E00-\u9FFF]/g) || []).length >= 2;
+        }
+
+        return language.textPattern.test(line);
+    }
+
+    function extractLanguageAudioText(text, language) {
+        const value = String(text || "");
+        const lines = value
             .split("\n")
             .map(function (line) {
                 return line.trim();
             })
             .filter(function (line) {
-                if (!/[A-Za-z]/.test(line)) {
+                if (!line) {
                     return false;
                 }
 
@@ -180,20 +277,112 @@
                     return false;
                 }
 
+                if (!lineMatchesLanguage(line, language)) {
+                    return false;
+                }
+
                 return true;
             });
 
-        return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1600);
+        return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1800);
     }
 
-    function EnglishAudioButton(props) {
+    function splitLanguageSentences(text, language) {
+        const value = String(text || "").trim();
+
+        if (!value) {
+            return [];
+        }
+
+        const sentencePattern = language.key === "english"
+            ? /[^.!?\n]+[.!?]?/g
+            : /[^。！？.!?\n]+[。！？.!?]?/g;
+        const sentences = value.match(sentencePattern) || [value];
+
+        return sentences
+            .map(function (sentence) {
+                return sentence.trim();
+            })
+            .filter(Boolean)
+            .slice(0, 20);
+    }
+
+    function normalizeAnswerText(text, language) {
+        const value = String(text || "").toLowerCase();
+
+        if (language.key === "english") {
+            return value.replace(/[^a-z0-9\s']/g, "").replace(/\s+/g, " ").trim();
+        }
+
+        return value.replace(/[\s、。！？,.!?「」『』（）()]/g, "").trim();
+    }
+
+    function calculateSimilarityScore(expected, actual, language) {
+        const a = normalizeAnswerText(expected, language);
+        const b = normalizeAnswerText(actual, language);
+        const maxLength = Math.max(a.length, b.length);
+
+        if (!maxLength) {
+            return 0;
+        }
+
+        const rows = Array.from({ length: a.length + 1 }, function () {
+            return new Array(b.length + 1).fill(0);
+        });
+
+        for (let i = 0; i <= a.length; i += 1) {
+            rows[i][0] = i;
+        }
+
+        for (let j = 0; j <= b.length; j += 1) {
+            rows[0][j] = j;
+        }
+
+        for (let i = 1; i <= a.length; i += 1) {
+            for (let j = 1; j <= b.length; j += 1) {
+                const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+                rows[i][j] = Math.min(
+                    rows[i - 1][j] + 1,
+                    rows[i][j - 1] + 1,
+                    rows[i - 1][j - 1] + cost
+                );
+            }
+        }
+
+        return Math.max(0, Math.round((1 - rows[a.length][b.length] / maxLength) * 100));
+    }
+
+    function buildPracticeFeedback(score) {
+        if (score >= 90) {
+            return "かなり近いです。この調子で自然に言えるまで続けましょう。";
+        }
+
+        if (score >= 70) {
+            return "だいぶ合っています。聞こえた順番と細かい語尾をもう一度確認しましょう。";
+        }
+
+        if (score >= 45) {
+            return "一部は合っています。まずは短い一文だけに絞ると練習しやすいです。";
+        }
+
+        return "まだ差があります。音声をもう一度聞いて、最初の数語から真似してみましょう。";
+    }
+
+    function LanguageAudioTools(props) {
         const text = props.text || "";
         const contextLabel = props.contextLabel || "";
         const label = props.label || "音声";
         const [status, setStatus] = useState("idle");
         const [rate, setRate] = useState("1");
         const [error, setError] = useState("");
-        const audioIdRef = useRef(`english-audio-${Math.random().toString(36).slice(2)}`);
+        const [sentenceIndex, setSentenceIndex] = useState(0);
+        const [practiceMode, setPracticeMode] = useState("");
+        const [dictationAnswer, setDictationAnswer] = useState("");
+        const [practiceResult, setPracticeResult] = useState("");
+        const [recognitionStatus, setRecognitionStatus] = useState("idle");
+        const audioIdRef = useRef(`language-audio-${Math.random().toString(36).slice(2)}`);
+        const recognitionRef = useRef(null);
+        const target = detectLanguageTarget(text, contextLabel);
 
         useEffect(function () {
             function handleAudioStart(event) {
@@ -206,43 +395,52 @@
                 setStatus("idle");
             }
 
-            window.addEventListener("pas-english-audio-start", handleAudioStart);
-            window.addEventListener("pas-english-audio-stop", handleAudioStop);
+            window.addEventListener("pas-language-audio-start", handleAudioStart);
+            window.addEventListener("pas-language-audio-stop", handleAudioStop);
 
             return function () {
-                window.removeEventListener("pas-english-audio-start", handleAudioStart);
-                window.removeEventListener("pas-english-audio-stop", handleAudioStop);
+                window.removeEventListener("pas-language-audio-start", handleAudioStart);
+                window.removeEventListener("pas-language-audio-stop", handleAudioStop);
+
+                if (recognitionRef.current) {
+                    try {
+                        recognitionRef.current.stop();
+                    } catch (err) {
+                        recognitionRef.current = null;
+                    }
+                }
             };
         }, []);
 
-        if (!shouldShowEnglishAudio(text, contextLabel)) {
+        if (!target || !isSpeechAvailable()) {
             return null;
         }
+
+        const activeSentence = target.sentences[Math.min(sentenceIndex, target.sentences.length - 1)] || target.text;
+        const canUseRecognition = Boolean(getSpeechRecognitionConstructor());
 
         function stopAudio() {
             window.speechSynthesis.cancel();
             setStatus("idle");
-            window.dispatchEvent(new CustomEvent("pas-english-audio-stop"));
+            window.dispatchEvent(new CustomEvent("pas-language-audio-stop"));
         }
 
-        function playAudio() {
-            const speechText = extractEnglishAudioText(text);
-
+        function playAudio(speechText) {
             if (!speechText) {
-                setError("再生できる英文が見つかりませんでした。");
+                setError("再生できる文章が見つかりませんでした。");
                 return;
             }
 
             setError("");
             window.speechSynthesis.cancel();
             window.dispatchEvent(
-                new CustomEvent("pas-english-audio-start", {
+                new CustomEvent("pas-language-audio-start", {
                     detail: { id: audioIdRef.current }
                 })
             );
 
             const utterance = new SpeechSynthesisUtterance(speechText);
-            utterance.lang = "en-US";
+            utterance.lang = target.language.lang;
             utterance.rate = Number(rate);
             utterance.onstart = function () {
                 setStatus("playing");
@@ -259,19 +457,103 @@
             window.speechSynthesis.speak(utterance);
         }
 
+        function playCurrentSentence() {
+            playAudio(activeSentence);
+        }
+
+        function playNextSentence() {
+            const nextIndex = target.sentences.length
+                ? Math.min(sentenceIndex + 1, target.sentences.length - 1)
+                : 0;
+            setSentenceIndex(nextIndex);
+            playAudio(target.sentences[nextIndex] || target.text);
+        }
+
+        function checkDictation() {
+            const score = calculateSimilarityScore(activeSentence, dictationAnswer, target.language);
+            setPracticeResult(`一致度 ${score}%：${buildPracticeFeedback(score)}`);
+        }
+
+        function startPronunciationCheck() {
+            const Recognition = getSpeechRecognitionConstructor();
+
+            if (!Recognition) {
+                setPracticeResult("このブラウザでは発音チェックに必要な音声認識が使えません。ChromeやSafariの対応環境で試してください。");
+                return;
+            }
+
+            if (recognitionRef.current) {
+                try {
+                    recognitionRef.current.stop();
+                } catch (err) {
+                    recognitionRef.current = null;
+                }
+            }
+
+            const recognition = new Recognition();
+            recognition.lang = target.language.lang;
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+            recognitionRef.current = recognition;
+            setRecognitionStatus("listening");
+            setPracticeResult("聞き取り中です。上の文を声に出して読んでください。");
+
+            recognition.onresult = function (event) {
+                const transcript = event.results && event.results[0] && event.results[0][0]
+                    ? event.results[0][0].transcript
+                    : "";
+                const score = calculateSimilarityScore(activeSentence, transcript, target.language);
+                setRecognitionStatus("idle");
+                setPracticeResult(`聞き取り: ${transcript || "取得できませんでした"} / 発音一致度 ${score}%：${buildPracticeFeedback(score)}`);
+            };
+
+            recognition.onerror = function () {
+                setRecognitionStatus("idle");
+                setPracticeResult("音声をうまく聞き取れませんでした。マイク許可と周囲の音を確認してください。");
+            };
+
+            recognition.onend = function () {
+                setRecognitionStatus("idle");
+            };
+
+            recognition.start();
+        }
+
         return h(
             "div",
-            { className: "english-audio-tools" },
+            { className: "language-audio-tools" },
             h(
                 "button",
                 {
                     type: "button",
                     className: "audio-play-button",
-                    onClick: status === "playing" || status === "loading" ? stopAudio : playAudio,
-                    "aria-label": status === "playing" || status === "loading" ? "英語音声を停止" : "英語音声を再生"
+                    onClick: status === "playing" || status === "loading" ? stopAudio : function () {
+                        playAudio(target.text);
+                    },
+                    "aria-label": status === "playing" || status === "loading" ? `${target.language.label}音声を停止` : `${target.language.label}音声を再生`
                 },
                 status === "loading" ? "読み込み中" : status === "playing" ? "停止" : label
             ),
+            h(
+                "button",
+                {
+                    type: "button",
+                    className: "audio-play-button secondary-audio-button",
+                    onClick: playCurrentSentence
+                },
+                "一文"
+            ),
+            target.sentences.length > 1
+                ? h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "audio-play-button secondary-audio-button",
+                        onClick: playNextSentence
+                    },
+                    "次へ"
+                )
+                : null,
             h(
                 "select",
                 {
@@ -286,6 +568,84 @@
                 h("option", { value: "1" }, "1.0x"),
                 h("option", { value: "1.25" }, "1.25x")
             ),
+            h("span", { className: "language-audio-label" }, target.language.label),
+            h(
+                "div",
+                { className: "language-practice-actions" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        onClick: function () {
+                            setPracticeMode(practiceMode === "shadowing" ? "" : "shadowing");
+                            setPracticeResult("");
+                        }
+                    },
+                    "シャドーイング"
+                ),
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        onClick: function () {
+                            setPracticeMode(practiceMode === "dictation" ? "" : "dictation");
+                            setPracticeResult("");
+                        }
+                    },
+                    "ディクテーション"
+                ),
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        onClick: function () {
+                            setPracticeMode(practiceMode === "pronunciation" ? "" : "pronunciation");
+                            setPracticeResult("");
+                        }
+                    },
+                    "発音チェック"
+                )
+            ),
+            practiceMode
+                ? h(
+                    "div",
+                    { className: "language-practice-panel" },
+                    h("p", { className: "practice-target" }, activeSentence),
+                    practiceMode === "shadowing"
+                        ? h("p", null, "音声を聞いたあと、同じリズムで声に出して練習してください。")
+                        : null,
+                    practiceMode === "dictation"
+                        ? h(
+                            React.Fragment,
+                            null,
+                            h("textarea", {
+                                value: dictationAnswer,
+                                onChange: function (event) {
+                                    setDictationAnswer(event.target.value);
+                                },
+                                placeholder: "聞こえた内容を書いてください"
+                            }),
+                            h(
+                                "button",
+                                { type: "button", onClick: checkDictation },
+                                "答え合わせ"
+                            )
+                        )
+                        : null,
+                    practiceMode === "pronunciation"
+                        ? h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: startPronunciationCheck,
+                                disabled: recognitionStatus === "listening"
+                            },
+                            recognitionStatus === "listening" ? "聞き取り中" : canUseRecognition ? "声に出して評価" : "音声認識は未対応"
+                        )
+                        : null,
+                    practiceResult ? h("p", { className: "practice-result" }, practiceResult) : null
+                )
+                : null,
             error ? h("p", { className: "audio-error" }, error) : null
         );
     }
@@ -1562,7 +1922,7 @@
                                         React.Fragment,
                                         null,
                                         h("p", null, section.content),
-                                        h(EnglishAudioButton, {
+                                        h(LanguageAudioTools, {
                                             text: section.content,
                                             contextLabel: audioContext,
                                             label: "音声で聞く"
@@ -2211,7 +2571,7 @@
                                 },
                                 h("p", null, messageText),
                                 chat.role === "assistant" && !isStreamingPlaceholder
-                                    ? h(EnglishAudioButton, {
+                                    ? h(LanguageAudioTools, {
                                         text: messageText,
                                         contextLabel: audioContext,
                                         label: "音声"
