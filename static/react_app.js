@@ -687,7 +687,7 @@
                         subjects.map(function (subject) {
                             return h(
                                 "article",
-                                { key: subject.subject, className: "roadmap-subject-card" },
+                                { key: `${subject.subject}-${subject.thread_id || "global"}`, className: "roadmap-subject-card" },
                                 h(
                                     "div",
                                     { className: "roadmap-subject-head" },
@@ -798,7 +798,7 @@
                     : h(
                         "section",
                         { className: "study-empty" },
-                        h("p", null, "まだロードマップはありません。まずは勉強したい科目を追加してください。")
+                        h("p", null, "まだロードマップはありません。授業で「ロードマップを作って」と頼むと、ここに表示されます。")
                     )
         );
     }

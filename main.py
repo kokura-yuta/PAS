@@ -2628,6 +2628,7 @@ def load_roadmap_overview(user_id):
     try:
         subject_names = set()
         textbooks_by_subject = {}
+        roadmap_thread_ids = {}
 
         study_threads = (
             db.query(ChatThread)
@@ -2639,12 +2640,14 @@ def load_roadmap_overview(user_id):
 
         chat_urls = {}
         thread_ids = {}
+        valid_thread_ids = set()
 
         for thread in study_threads:
             subject = normalize_subject_title(thread.title) or "学習相談"
             subject_names.add(subject)
             chat_urls.setdefault(subject, f"/chat/{thread.id}")
             thread_ids.setdefault(subject, thread.id)
+            valid_thread_ids.add(thread.id)
 
         textbooks = (
             db.query(StudyTextbook)
@@ -2658,6 +2661,24 @@ def load_roadmap_overview(user_id):
             subject_names.add(subject)
             textbooks_by_subject.setdefault(subject, []).append(textbook)
 
+        existing_roadmap_items = (
+            db.query(StudyRoadmapItem)
+            .filter(StudyRoadmapItem.user_id == user_id)
+            .order_by(StudyRoadmapItem.updated_at.desc().nullslast(), StudyRoadmapItem.id.desc())
+            .all()
+        )
+
+        for item in existing_roadmap_items:
+            subject = normalize_subject_title(item.subject) or "学習相談"
+
+            if is_roadmap_deleted(db, user_id, subject, item.thread_id):
+                continue
+
+            subject_names.add(subject)
+
+            if item.thread_id is not None and subject not in roadmap_thread_ids:
+                roadmap_thread_ids[subject] = item.thread_id
+
         roadmaps = []
 
         for subject in sorted(subject_names):
@@ -2669,13 +2690,14 @@ def load_roadmap_overview(user_id):
                 .order_by(StudyUnderstanding.updated_at.desc())
                 .all()
             )
+            roadmap_thread_id = roadmap_thread_ids.get(subject, thread_ids.get(subject))
             roadmap_items = load_or_create_roadmap(
                 db,
                 user_id,
                 subject,
                 subject_textbooks,
                 understandings,
-                thread_ids.get(subject)
+                roadmap_thread_id
             )
 
             if not roadmap_items:
@@ -2721,8 +2743,12 @@ def load_roadmap_overview(user_id):
                 "subject": subject,
                 "roadmap_title": first_item.get("roadmap_title") or f"{subject}ロードマップ",
                 "goal": first_item.get("goal") or "",
-                "thread_id": thread_ids.get(subject),
-                "chat_url": chat_urls.get(subject, ""),
+                "thread_id": roadmap_thread_id,
+                "chat_url": (
+                    f"/chat/{roadmap_thread_id}"
+                    if roadmap_thread_id in valid_thread_ids
+                    else chat_urls.get(subject, "")
+                ),
                 "bookshelf_url": f"/bookshelf/{quote(subject)}",
                 "understanding_percent": subject_understanding.percent if subject_understanding else 0,
                 "current_item": current_item,
