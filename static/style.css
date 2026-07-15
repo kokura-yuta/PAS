@@ -886,6 +886,7 @@ body:has(.study-app) {
 
 .study-textbook-page > * {
     min-width: 0;
+    max-width: 100%;
 }
 
 .study-textbook-page .textbook-meta-card {
@@ -1708,6 +1709,9 @@ body:has(.study-app) {
 .textbook-reader {
     display: grid;
     gap: 18px;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
     padding: 22px;
     border: 1px solid var(--study-line);
     border-radius: 26px;
@@ -1717,6 +1721,8 @@ body:has(.study-app) {
 
 .textbook-section {
     scroll-margin-top: 92px;
+    min-width: 0;
+    max-width: 100%;
     padding-bottom: 18px;
     border-bottom: 1px solid var(--study-line);
 }
@@ -1731,6 +1737,7 @@ body:has(.study-app) {
     grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
     gap: 12px;
+    min-width: 0;
     margin-bottom: 10px;
 }
 
@@ -1739,18 +1746,26 @@ body:has(.study-app) {
     margin: 0;
     font-size: 20px;
     line-height: 1.35;
+    overflow-wrap: anywhere;
+    word-break: break-word;
 }
 
 .textbook-section p,
 .textbook-updates p {
+    max-width: 100%;
     margin: 0;
     color: var(--study-text);
     line-height: 1.9;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-break: strict;
 }
 
 .textbook-code-block,
 .textbook-diagram-block {
+    max-width: 100%;
+    box-sizing: border-box;
     margin: 0;
     padding: 16px;
     overflow-x: auto;
@@ -1771,6 +1786,7 @@ body:has(.study-app) {
 .textbook-code-block code,
 .textbook-diagram-block code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    overflow-wrap: normal;
 }
 
 .textbook-updates {
@@ -2163,7 +2179,7 @@ body:has(.study-app) {
 
     .textbook-reader {
         gap: 14px;
-        padding: 16px;
+        padding: 14px;
         border-radius: 20px;
     }
 
@@ -2256,14 +2272,20 @@ body:has(.study-app) {
 
     .textbook-section p,
     .textbook-updates p {
-        font-size: 16px;
-        line-height: 1.85;
+        font-size: 15px;
+        line-height: 1.82;
     }
 
     .textbook-code-block,
     .textbook-diagram-block {
-        padding: 13px;
+        padding: 12px;
         font-size: 13px;
+    }
+
+    .textbook-diagram-block {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
     }
 
     .textbook-preview-card {
