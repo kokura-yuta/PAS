@@ -125,6 +125,171 @@
         "授業の進め方を準備しています"
     ];
 
+    const ENGLISH_AUDIO_CONTEXT_PATTERN = /英語|英文|英単語|TOEIC|リスニング|シャドーイング|English|Listening/i;
+
+    function isSpeechAvailable() {
+        return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+    }
+
+    function looksLikeEnglishStudyContext(contextLabel) {
+        return ENGLISH_AUDIO_CONTEXT_PATTERN.test(contextLabel || "");
+    }
+
+    function hasEnoughEnglishText(text) {
+        const value = String(text || "");
+        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+        const englishCharacters = words.join("").length;
+
+        if (englishCharacters < 12 || words.length < 3) {
+            return false;
+        }
+
+        return true;
+    }
+
+    function looksLikeEnglishSentence(text) {
+        const value = String(text || "");
+        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+        const englishCharacters = words.join("").length;
+        const totalCharacters = value.replace(/\s/g, "").length || 1;
+        const englishRatio = englishCharacters / totalCharacters;
+
+        return words.length >= 5 && englishRatio > 0.45;
+    }
+
+    function shouldShowEnglishAudio(text, contextLabel) {
+        if (!isSpeechAvailable() || !hasEnoughEnglishText(text)) {
+            return false;
+        }
+
+        return looksLikeEnglishStudyContext(contextLabel) || looksLikeEnglishSentence(text);
+    }
+
+    function extractEnglishAudioText(text) {
+        const lines = String(text || "")
+            .split("\n")
+            .map(function (line) {
+                return line.trim();
+            })
+            .filter(function (line) {
+                if (!/[A-Za-z]/.test(line)) {
+                    return false;
+                }
+
+                if (/^(@|def |class |return |import |from |const |let |var |function |\{|\}|\/\/|#)/.test(line)) {
+                    return false;
+                }
+
+                return true;
+            });
+
+        return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1600);
+    }
+
+    function EnglishAudioButton(props) {
+        const text = props.text || "";
+        const contextLabel = props.contextLabel || "";
+        const label = props.label || "音声";
+        const [status, setStatus] = useState("idle");
+        const [rate, setRate] = useState("1");
+        const [error, setError] = useState("");
+        const audioIdRef = useRef(`english-audio-${Math.random().toString(36).slice(2)}`);
+
+        useEffect(function () {
+            function handleAudioStart(event) {
+                if (!event.detail || event.detail.id !== audioIdRef.current) {
+                    setStatus("idle");
+                }
+            }
+
+            function handleAudioStop() {
+                setStatus("idle");
+            }
+
+            window.addEventListener("pas-english-audio-start", handleAudioStart);
+            window.addEventListener("pas-english-audio-stop", handleAudioStop);
+
+            return function () {
+                window.removeEventListener("pas-english-audio-start", handleAudioStart);
+                window.removeEventListener("pas-english-audio-stop", handleAudioStop);
+            };
+        }, []);
+
+        if (!shouldShowEnglishAudio(text, contextLabel)) {
+            return null;
+        }
+
+        function stopAudio() {
+            window.speechSynthesis.cancel();
+            setStatus("idle");
+            window.dispatchEvent(new CustomEvent("pas-english-audio-stop"));
+        }
+
+        function playAudio() {
+            const speechText = extractEnglishAudioText(text);
+
+            if (!speechText) {
+                setError("再生できる英文が見つかりませんでした。");
+                return;
+            }
+
+            setError("");
+            window.speechSynthesis.cancel();
+            window.dispatchEvent(
+                new CustomEvent("pas-english-audio-start", {
+                    detail: { id: audioIdRef.current }
+                })
+            );
+
+            const utterance = new SpeechSynthesisUtterance(speechText);
+            utterance.lang = "en-US";
+            utterance.rate = Number(rate);
+            utterance.onstart = function () {
+                setStatus("playing");
+            };
+            utterance.onend = function () {
+                setStatus("idle");
+            };
+            utterance.onerror = function () {
+                setStatus("idle");
+                setError("音声を再生できませんでした。もう一度試してください。");
+            };
+
+            setStatus("loading");
+            window.speechSynthesis.speak(utterance);
+        }
+
+        return h(
+            "div",
+            { className: "english-audio-tools" },
+            h(
+                "button",
+                {
+                    type: "button",
+                    className: "audio-play-button",
+                    onClick: status === "playing" || status === "loading" ? stopAudio : playAudio,
+                    "aria-label": status === "playing" || status === "loading" ? "英語音声を停止" : "英語音声を再生"
+                },
+                status === "loading" ? "読み込み中" : status === "playing" ? "停止" : label
+            ),
+            h(
+                "select",
+                {
+                    className: "audio-rate-select",
+                    value: rate,
+                    onChange: function (event) {
+                        setRate(event.target.value);
+                    },
+                    "aria-label": "再生速度"
+                },
+                h("option", { value: "0.75" }, "0.75x"),
+                h("option", { value: "1" }, "1.0x"),
+                h("option", { value: "1.25" }, "1.25x")
+            ),
+            error ? h("p", { className: "audio-error" }, error) : null
+        );
+    }
+
     function App() {
         const [route, setRoute] = useState(window.location.pathname);
         const [screenState, setScreenState] = useState("entered");
@@ -1376,6 +1541,7 @@
                         { className: "textbook-reader" },
                         sections.map(function (section, index) {
                             const blockSection = section.key === "code_example" || section.key === "visual_diagram";
+                            const audioContext = `${textbook.subject || ""} ${textbook.title || ""} ${section.label || ""}`;
 
                             return h(
                                 "section",
@@ -1392,7 +1558,16 @@
                                         { className: section.key === "code_example" ? "textbook-code-block" : "textbook-diagram-block" },
                                         h("code", null, section.content)
                                     )
-                                    : h("p", null, section.content)
+                                    : h(
+                                        React.Fragment,
+                                        null,
+                                        h("p", null, section.content),
+                                        h(EnglishAudioButton, {
+                                            text: section.content,
+                                            contextLabel: audioContext,
+                                            label: "音声で聞く"
+                                        })
+                                    )
                             );
                         })
                     ),
@@ -2026,13 +2201,22 @@
                     : messages.length
                         ? messages.map(function (chat, index) {
                             const isStreamingPlaceholder = chat.temp_id && !chat.content;
+                            const messageText = chat.content || (isStreamingPlaceholder ? "先生が考えています" : "");
+                            const audioContext = chatData && chatData.thread ? chatData.thread.title : "";
                             return h(
                                 "div",
                                 {
                                     key: index,
                                     className: `study-message ${chat.role === "user" ? "student-message" : "teacher-message"}${isStreamingPlaceholder ? " thinking-message" : ""}`
                                 },
-                                h("p", null, chat.content || (isStreamingPlaceholder ? "先生が考えています" : ""))
+                                h("p", null, messageText),
+                                chat.role === "assistant" && !isStreamingPlaceholder
+                                    ? h(EnglishAudioButton, {
+                                        text: messageText,
+                                        contextLabel: audioContext,
+                                        label: "音声"
+                                    })
+                                    : null
                             );
                         })
                         : h(

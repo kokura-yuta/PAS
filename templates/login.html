@@ -28,6 +28,16 @@
                     <input type="password" name="password" autocomplete="current-password" required>
                 </div>
 
+                <label class="remember-option">
+                    <input
+                        type="checkbox"
+                        name="remember_login"
+                        value="on"
+                        {% if remember_login %}checked{% endif %}
+                    >
+                    <span>この端末でログイン状態を保持する</span>
+                </label>
+
                 <button type="submit">ログイン</button>
             </form>
 

@@ -35,7 +35,9 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-7")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-8")[:12]
+REMEMBER_COOKIE_NAME = "pas_remember_login"
+REMEMBER_LOGIN_DAYS = 30
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -368,6 +370,19 @@ class PasswordResetToken(Base):
     used_at = Column(DateTime)
     created_at = Column(DateTime, default=app_now)
 
+
+class RememberLoginToken(Base):
+    __tablename__ = "remember_login_tokens"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    selector = Column(String(80), unique=True, index=True)
+    token_hash = Column(Text)
+    expires_at = Column(DateTime)
+    revoked_at = Column(DateTime)
+    last_used_at = Column(DateTime)
+    created_at = Column(DateTime, default=app_now)
+
 class ChatMessage(Base):
     __tablename__="chat_messages"
 
@@ -691,7 +706,8 @@ def ensure_user_id_columns():
         "study_roadmap_items",
         "study_roadmap_deletions",
         "study_lesson_states",
-        "password_reset_tokens"
+        "password_reset_tokens",
+        "remember_login_tokens"
     ]
 
     for table_name in user_tables:
@@ -857,6 +873,175 @@ def hash_reset_token(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def hash_remember_token(token):
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def split_remember_token(cookie_value):
+    cookie_value = (cookie_value or "").strip()
+
+    if "." not in cookie_value:
+        return None, None
+
+    selector, validator = cookie_value.split(".", 1)
+
+    if not selector or not validator:
+        return None, None
+
+    return selector, validator
+
+
+def is_secure_request(request):
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+
+    if forwarded_proto:
+        return forwarded_proto == "https"
+
+    configured_url = (os.getenv("APP_BASE_URL") or "").strip()
+
+    if configured_url:
+        return configured_url.startswith("https://")
+
+    return request.url.scheme == "https"
+
+
+def create_remember_login_token(user_id):
+    db = SessionLocal()
+
+    try:
+        for _ in range(3):
+            selector = secrets.token_urlsafe(12)
+            validator = secrets.token_urlsafe(32)
+            remember_token = RememberLoginToken(
+                user_id=user_id,
+                selector=selector,
+                token_hash=hash_remember_token(validator),
+                expires_at=app_now() + timedelta(days=REMEMBER_LOGIN_DAYS)
+            )
+
+            db.add(remember_token)
+
+            try:
+                db.commit()
+                return f"{selector}.{validator}"
+            except IntegrityError:
+                db.rollback()
+
+        return None
+    finally:
+        db.close()
+
+
+def load_user_from_remember_token(cookie_value):
+    selector, validator = split_remember_token(cookie_value)
+
+    if not selector or not validator:
+        return None
+
+    db = SessionLocal()
+
+    try:
+        remember_token = (
+            db.query(RememberLoginToken)
+            .filter(RememberLoginToken.selector == selector)
+            .filter(RememberLoginToken.revoked_at.is_(None))
+            .first()
+        )
+
+        if remember_token is None:
+            return None
+
+        if remember_token.expires_at is None or remember_token.expires_at < app_now():
+            remember_token.revoked_at = app_now()
+            db.commit()
+            return None
+
+        if not secrets.compare_digest(
+            remember_token.token_hash or "",
+            hash_remember_token(validator)
+        ):
+            remember_token.revoked_at = app_now()
+            db.commit()
+            return None
+
+        user = db.query(User).filter(User.id == remember_token.user_id).first()
+
+        if user is None:
+            remember_token.revoked_at = app_now()
+            db.commit()
+            return None
+
+        remember_token.last_used_at = app_now()
+        db.expunge(user)
+        db.commit()
+        return user
+    finally:
+        db.close()
+
+
+def revoke_remember_login_token(cookie_value):
+    selector, _ = split_remember_token(cookie_value)
+
+    if not selector:
+        return
+
+    db = SessionLocal()
+
+    try:
+        remember_token = (
+            db.query(RememberLoginToken)
+            .filter(RememberLoginToken.selector == selector)
+            .filter(RememberLoginToken.revoked_at.is_(None))
+            .first()
+        )
+
+        if remember_token:
+            remember_token.revoked_at = app_now()
+            db.commit()
+    finally:
+        db.close()
+
+
+def revoke_user_remember_login_tokens(user_id, db=None):
+    own_db = db is None
+    db = db or SessionLocal()
+
+    try:
+        (
+            db.query(RememberLoginToken)
+            .filter(RememberLoginToken.user_id == user_id)
+            .filter(RememberLoginToken.revoked_at.is_(None))
+            .update({"revoked_at": app_now()}, synchronize_session=False)
+        )
+
+        if own_db:
+            db.commit()
+    finally:
+        if own_db:
+            db.close()
+
+
+def set_remember_login_cookie(response, request, user_id):
+    remember_value = create_remember_login_token(user_id)
+
+    if not remember_value:
+        return
+
+    response.set_cookie(
+        key=REMEMBER_COOKIE_NAME,
+        value=remember_value,
+        max_age=REMEMBER_LOGIN_DAYS * 24 * 60 * 60,
+        httponly=True,
+        secure=is_secure_request(request),
+        samesite="lax",
+        path="/"
+    )
+
+
+def clear_remember_login_cookie(response):
+    response.delete_cookie(key=REMEMBER_COOKIE_NAME, path="/")
+
+
 def build_base_url(request):
     configured_url = (os.getenv("APP_BASE_URL") or "").strip()
 
@@ -950,6 +1135,7 @@ def reset_user_password(token, password):
 
         user.password_hash = hash_password(password)
         reset_token.used_at = app_now()
+        revoke_user_remember_login_tokens(user.id, db=db)
         db.commit()
         return True
     finally:
@@ -1003,7 +1189,20 @@ def load_user(user_id):
 
 def get_current_user(request):
     user_id = request.session.get("user_id")
-    return load_user(user_id)
+    user = load_user(user_id)
+
+    if user:
+        return user
+
+    remembered_user = load_user_from_remember_token(
+        request.cookies.get(REMEMBER_COOKIE_NAME)
+    )
+
+    if remembered_user:
+        login_user(request, remembered_user.id)
+        return remembered_user
+
+    return None
 
 
 def login_user(request, user_id):
@@ -6779,7 +6978,8 @@ app = FastAPI()
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET_KEY,
-    same_site="lax"
+    same_site="lax",
+    max_age=None
 )
 
 app.mount(
@@ -6849,13 +7049,19 @@ def signup_action(
 
 @app.get("/login")
 def login_page(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user:
+        return RedirectResponse(url="/", status_code=303)
+
     return templates.TemplateResponse(
         request=request,
         name="login.html",
         context={
             "settings": {"theme_name": "calm"},
             "error": "",
-            "email": ""
+            "email": "",
+            "remember_login": False
         }
     )
 
@@ -6864,7 +7070,8 @@ def login_page(request: Request):
 def login_action(
     request: Request,
     email: str = Form(""),
-    password: str = Form("")
+    password: str = Form(""),
+    remember_login: str = Form("")
 ):
     user = authenticate_user(email, password)
 
@@ -6875,12 +7082,20 @@ def login_action(
             context={
                 "settings": {"theme_name": "calm"},
                 "error": "メールアドレスかパスワードが違います。",
-                "email": email
+                "email": email,
+                "remember_login": remember_login == "on"
             }
         )
 
     login_user(request, user.id)
-    return RedirectResponse(url="/", status_code=303)
+    response = RedirectResponse(url="/", status_code=303)
+
+    if remember_login == "on":
+        set_remember_login_cookie(response, request, user.id)
+    else:
+        clear_remember_login_cookie(response)
+
+    return response
 
 
 @app.get("/forgot-password")
@@ -6993,8 +7208,11 @@ def reset_password_action(
 
 @app.post("/logout")
 def logout_action(request: Request):
+    revoke_remember_login_token(request.cookies.get(REMEMBER_COOKIE_NAME))
     request.session.clear()
-    return RedirectResponse(url="/login", status_code=303)
+    response = RedirectResponse(url="/login", status_code=303)
+    clear_remember_login_cookie(response)
+    return response
 
 
 @app.get("/api/home")
