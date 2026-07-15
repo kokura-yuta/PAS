@@ -156,6 +156,10 @@
         }
     ];
 
+    const LANGUAGE_AUDIO_SECTION_PATTERN = /理解確認|応用問題|問題|例題|練習|クイズ|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT/i;
+    const LANGUAGE_AUDIO_TEXT_PATTERN = /問題|例題|練習|クイズ|単語問題|語彙問題|Vocabulary|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT|次の.*訳|次の.*読|次の.*選/i;
+    const LANGUAGE_AUDIO_LINE_MARKER_PATTERN = /^(Q|Question|問|問題|No\.|[0-9０-９]+[.)．、]|[①②③④⑤⑥⑦⑧⑨⑩]|[A-DＡ-Ｄア-エ][.)．、])/i;
+
     function isSpeechAvailable() {
         return "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
     }
@@ -221,7 +225,11 @@
             return null;
         }
 
-        const speechText = extractLanguageAudioText(text, language);
+        if (!isLanguageExerciseAudioContext(text, contextLabel)) {
+            return null;
+        }
+
+        const speechText = extractLanguageAudioText(text, language, contextLabel);
 
         if (!speechText) {
             return null;
@@ -232,6 +240,19 @@
             text: speechText,
             sentences: splitLanguageSentences(speechText, language)
         };
+    }
+
+    function isLanguageExerciseAudioContext(text, contextLabel) {
+        const context = String(contextLabel || "");
+        const value = String(text || "");
+
+        return LANGUAGE_AUDIO_SECTION_PATTERN.test(context) || LANGUAGE_AUDIO_TEXT_PATTERN.test(value);
+    }
+
+    function hasLanguageAudioMarker(line) {
+        const value = String(line || "").trim();
+
+        return LANGUAGE_AUDIO_TEXT_PATTERN.test(value) || LANGUAGE_AUDIO_LINE_MARKER_PATTERN.test(value);
     }
 
     function lineMatchesLanguage(line, language) {
@@ -261,14 +282,17 @@
         return language.textPattern.test(line);
     }
 
-    function extractLanguageAudioText(text, language) {
+    function extractLanguageAudioText(text, language, contextLabel) {
         const value = String(text || "");
-        const lines = value
+        const contextIsExerciseSection = LANGUAGE_AUDIO_SECTION_PATTERN.test(String(contextLabel || ""));
+        const rawLines = value
             .split("\n")
             .map(function (line) {
                 return line.trim();
             })
-            .filter(function (line) {
+            .filter(Boolean);
+        const lines = rawLines
+            .filter(function (line, index) {
                 if (!line) {
                     return false;
                 }
@@ -279,6 +303,18 @@
 
                 if (!lineMatchesLanguage(line, language)) {
                     return false;
+                }
+
+                if (!contextIsExerciseSection) {
+                    const nearbyInstruction = [
+                        rawLines[index - 2] || "",
+                        rawLines[index - 1] || "",
+                        line
+                    ].join(" ");
+
+                    if (!hasLanguageAudioMarker(nearbyInstruction)) {
+                        return false;
+                    }
                 }
 
                 return true;
