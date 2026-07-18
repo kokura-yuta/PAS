@@ -125,6 +125,18 @@
         "授業の進め方を準備しています"
     ];
 
+    function normalizeTextbookSectionContent(content) {
+        return String(content || "")
+            .replace(/\r\n?/g, "\n")
+            .split("\n")
+            .map(function (line) {
+                return line.replace(/[ \t\u3000]+$/g, "");
+            })
+            .join("\n")
+            .replace(/\n{3,}/g, "\n\n")
+            .trim();
+    }
+
     const KOREAN_CHARACTER_PATTERN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF]/;
     const KOREAN_CHARACTER_GLOBAL_PATTERN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF]/g;
 
@@ -2103,7 +2115,7 @@
                 return item.key === sectionKey;
             });
 
-            return section && section.content ? section.content.trim() : "";
+            return section && section.content ? normalizeTextbookSectionContent(section.content) : "";
         }
 
         function getCurrentProblemText() {
@@ -2287,6 +2299,7 @@
                         sections.map(function (section, index) {
                             const blockSection = section.key === "code_example" || section.key === "visual_diagram";
                             const audioContext = `${textbook.subject || ""} ${textbook.title || ""} ${section.label || ""}`;
+                            const displayContent = normalizeTextbookSectionContent(section.content);
 
                             return h(
                                 "section",
@@ -2301,14 +2314,14 @@
                                     ? h(
                                         "pre",
                                         { className: section.key === "code_example" ? "textbook-code-block" : "textbook-diagram-block" },
-                                        h("code", null, section.content)
+                                        h("code", null, displayContent)
                                     )
                                     : h(
                                         React.Fragment,
                                         null,
-                                        h("p", null, section.content),
+                                        h("p", null, displayContent),
                                         h(LanguageAudioTools, {
-                                            text: section.content,
+                                            text: displayContent,
                                             contextLabel: audioContext,
                                             label: "音声で聞く",
                                             sourceType: "textbook"
