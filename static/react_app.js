@@ -161,7 +161,7 @@
 
     const LANGUAGE_AUDIO_SECTION_PATTERN = /理解確認|応用問題|問題|例題|練習|クイズ|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT/i;
     const LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN = /リスニング用問題|リスニング問題|発音問題|発音練習/i;
-    const LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN = /音声用|再生用|読み上げ用/i;
+    const LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN = /(?:音声(?:用)?|再生用|読み上げ用|Audio)\s*[:：]/i;
     const LANGUAGE_AUDIO_TEXT_PATTERN = /問題|例題|練習|クイズ|単語問題|語彙問題|Vocabulary|リスニング|シャドーイング|ディクテーション|発音|音読|会話文|長文|選択肢|空欄|穴埋め|和訳|英訳|聞き取り|TOEIC|HSK|JLPT|次の.*訳|次の.*読|次の.*選/i;
     const LANGUAGE_AUDIO_LINE_MARKER_PATTERN = /^(Q|Question|問|問題|No\.|[0-9０-９]+[.)．、]|[①②③④⑤⑥⑦⑧⑨⑩]|[A-DＡ-Ｄア-エ][.)．、])/i;
 
@@ -181,44 +181,16 @@
         }) || null;
     }
 
-    function isConversationAudioLanguage(language) {
-        return Boolean(language && ["english", "korean", "chinese"].includes(language.key));
-    }
-
     function hasConversationLanguageAudioText(text, contextLabel) {
         const value = String(text || "");
-        const contextLanguage = getLanguageContext(contextLabel);
 
-        if (LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)) {
-            return true;
-        }
-
-        if (isConversationAudioLanguage(contextLanguage) && contextLanguage.textPattern.test(value)) {
-            return true;
-        }
-
-        if ((value.match(KOREAN_CHARACTER_GLOBAL_PATTERN) || []).length >= 1) {
-            return true;
-        }
-
-        const chineseCharacters = (value.match(/[\u4E00-\u9FFF]/g) || []).length;
-        const japaneseKana = /[\u3040-\u30ff]/.test(value);
-
-        if (chineseCharacters >= 2 && !japaneseKana) {
-            return true;
-        }
-
-        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
-        const englishCharacters = words.join("").length;
-        const totalCharacters = value.replace(/\s/g, "").length || 1;
-
-        return words.length >= 3 && englishCharacters >= 12 && englishCharacters / totalCharacters > 0.35;
+        return LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value);
     }
 
     function detectLanguageFromText(text) {
         const value = String(text || "");
         const detectionValue = LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)
-            ? value.replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
+            ? value.replace(/^.*?(音声(?:用)?|再生用|読み上げ用|Audio)\s*[:：]\s*/i, "")
             : value;
 
         if (KOREAN_CHARACTER_PATTERN.test(detectionValue)) {
@@ -346,7 +318,7 @@
 
     function extractLanguageSnippetFromLine(line, language) {
         const cleanedLine = String(line || "")
-            .replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
+            .replace(/^.*?(音声(?:用)?|再生用|読み上げ用|Audio)\s*[:：]\s*/i, "")
             .replace(/^[\s"'“”‘’「『（(]*(?:[A-DＡ-Ｄ]|[ア-エ]|[0-9０-９]+|Q|Question|問|問題)\s*[:：.)．、]\s*/i, "")
             .trim();
 
@@ -417,7 +389,7 @@
 
                 if (sourceType === "chat") {
                     if (!hasManualRequest) {
-                        return true;
+                        return false;
                     }
                     if (manualMarkerIndex >= 0 && index < manualMarkerIndex) {
                         return false;
