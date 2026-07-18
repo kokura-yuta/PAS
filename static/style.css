@@ -824,6 +824,12 @@ body:has(.study-app) {
     width: fit-content;
     max-width: 100%;
     align-items: center;
+    margin-top: 8px;
+    margin-bottom: 0;
+}
+
+.textbook-section .language-audio-textbook {
+    margin-top: 6px;
 }
 
 .audio-play-button,

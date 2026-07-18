@@ -125,16 +125,19 @@
         "授業の進め方を準備しています"
     ];
 
-    function normalizeTextbookSectionContent(content) {
-        return String(content || "")
+    function normalizeTextbookSectionContent(content, compact) {
+        const normalized = String(content || "")
             .replace(/\r\n?/g, "\n")
             .split("\n")
             .map(function (line) {
                 return line.replace(/[ \t\u3000]+$/g, "");
             })
             .join("\n")
-            .replace(/\n{3,}/g, "\n\n")
             .trim();
+
+        return compact
+            ? normalized.replace(/\n{2,}/g, "\n")
+            : normalized.replace(/\n{3,}/g, "\n\n");
     }
 
     const KOREAN_CHARACTER_PATTERN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF]/;
@@ -2298,8 +2301,9 @@
                         { className: "textbook-reader" },
                         sections.map(function (section, index) {
                             const blockSection = section.key === "code_example" || section.key === "visual_diagram";
+                            const compactAudioSection = LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN.test(section.label || "");
                             const audioContext = `${textbook.subject || ""} ${textbook.title || ""} ${section.label || ""}`;
-                            const displayContent = normalizeTextbookSectionContent(section.content);
+                            const displayContent = normalizeTextbookSectionContent(section.content, compactAudioSection);
 
                             return h(
                                 "section",
