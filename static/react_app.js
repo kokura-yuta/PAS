@@ -130,7 +130,9 @@
             .replace(/\r\n?/g, "\n")
             .split("\n")
             .map(function (line) {
-                return line.replace(/[ \t\u3000]+$/g, "");
+                return line
+                    .replace(/^[\s\u00A0\u200B\uFEFF\u3000]+$/g, "")
+                    .replace(/[\s\u00A0\u200B\uFEFF\u3000]+$/g, "");
             })
             .join("\n")
             .trim();
@@ -2304,10 +2306,19 @@
                             const compactAudioSection = LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN.test(section.label || "");
                             const audioContext = `${textbook.subject || ""} ${textbook.title || ""} ${section.label || ""}`;
                             const displayContent = normalizeTextbookSectionContent(section.content, compactAudioSection);
+                            const audioLines = compactAudioSection
+                                ? displayContent.split("\n").filter(function (line) {
+                                    return line.trim();
+                                })
+                                : [];
 
                             return h(
                                 "section",
-                                { key: section.key, id: `textbook-section-${section.key}`, className: "textbook-section" },
+                                {
+                                    key: section.key,
+                                    id: `textbook-section-${section.key}`,
+                                    className: `textbook-section${compactAudioSection ? " textbook-section-audio" : ""}`
+                                },
                                 h(
                                     "div",
                                     { className: "textbook-chapter-heading" },
@@ -2323,7 +2334,19 @@
                                     : h(
                                         React.Fragment,
                                         null,
-                                        h("p", null, displayContent),
+                                        compactAudioSection
+                                            ? h(
+                                                "div",
+                                                { className: "textbook-audio-lines" },
+                                                audioLines.map(function (line, lineIndex) {
+                                                    return h(
+                                                        "p",
+                                                        { key: `${section.key}-${lineIndex}`, className: "textbook-audio-line" },
+                                                        line
+                                                    );
+                                                })
+                                            )
+                                            : h("p", null, displayContent),
                                         h(LanguageAudioTools, {
                                             text: displayContent,
                                             contextLabel: audioContext,

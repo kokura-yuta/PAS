@@ -2029,6 +2029,16 @@ body:has(.study-app) {
     border-bottom: 0;
 }
 
+.textbook-reader .textbook-section-audio {
+    display: grid;
+    gap: 8px;
+    padding-bottom: 12px;
+}
+
+.textbook-section-audio .textbook-chapter-heading {
+    margin-bottom: 2px;
+}
+
 .textbook-chapter-heading {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
@@ -2057,6 +2067,23 @@ body:has(.study-app) {
     overflow-wrap: anywhere;
     word-break: break-word;
     line-break: strict;
+}
+
+.textbook-audio-lines {
+    display: grid;
+    gap: 4px;
+    min-width: 0;
+    max-width: 100%;
+}
+
+.textbook-section .textbook-audio-line {
+    margin: 0;
+    line-height: 1.58;
+    white-space: normal;
+}
+
+.textbook-section-audio .language-audio-textbook {
+    margin-top: 2px;
 }
 
 .textbook-code-block,
