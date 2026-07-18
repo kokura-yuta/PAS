@@ -798,33 +798,37 @@ body:has(.study-app) {
 .language-audio-tools,
 .english-audio-tools {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     align-items: center;
-    gap: 6px;
-    width: fit-content;
+    gap: 7px;
+    width: 100%;
     max-width: 100%;
     box-sizing: border-box;
-    margin-top: 12px;
-    padding: 6px;
-    border: 1px solid rgba(21, 23, 25, 0.08);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.72);
-    box-shadow: 0 12px 30px rgba(21, 23, 25, 0.08);
-    backdrop-filter: blur(14px);
+    margin-top: 14px;
+    padding: 2px 0;
+    overflow-x: auto;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    backdrop-filter: none;
+    scrollbar-width: none;
+}
+
+.language-audio-tools::-webkit-scrollbar,
+.english-audio-tools::-webkit-scrollbar {
+    display: none;
 }
 
 .language-audio-textbook {
-    width: 100%;
-    border-radius: 20px;
-    align-items: flex-start;
-    padding: 10px;
-    background: rgba(255, 255, 255, 0.82);
+    align-items: center;
 }
 
 .audio-play-button,
 .audio-rate-select,
 .audio-sentence-select {
     min-height: 32px;
+    flex: 0 0 auto;
     border: 0;
     border-radius: 999px;
     background: rgba(21, 23, 25, 0.07);
@@ -866,7 +870,8 @@ body:has(.study-app) {
 
 .audio-sequence-controls {
     display: inline-flex;
-    flex-wrap: wrap;
+    flex: 0 0 auto;
+    flex-wrap: nowrap;
     align-items: center;
     gap: 5px;
 }
@@ -884,6 +889,7 @@ body:has(.study-app) {
 
 .audio-position-label {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     min-height: 28px;
     padding: 0 8px;
@@ -896,6 +902,7 @@ body:has(.study-app) {
 
 .language-audio-label {
     display: inline-flex;
+    flex: 0 0 auto;
     align-items: center;
     min-height: 28px;
     padding: 0 8px;
@@ -2355,9 +2362,9 @@ body:has(.study-app) {
 
 .language-audio-tools,
 .english-audio-tools {
-    border-color: rgba(22, 23, 25, 0.08);
-    background: rgba(255, 255, 255, 0.9);
-    box-shadow: 0 10px 26px rgba(22, 23, 25, 0.07);
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
 }
 
 .audio-play-button {
