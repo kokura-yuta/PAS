@@ -14,26 +14,30 @@
 }
 
 .study-app {
-    --study-bg: #f7f5f0;
-    --study-surface: rgba(255, 255, 255, 0.78);
-    --study-surface-strong: rgba(255, 255, 255, 0.92);
-    --study-text: #151719;
-    --study-muted: #6f747b;
-    --study-line: rgba(21, 23, 25, 0.12);
-    --study-accent: #17191c;
+    --study-bg: #f7f7f5;
+    --study-surface: rgba(255, 255, 255, 0.76);
+    --study-surface-strong: rgba(255, 255, 255, 0.94);
+    --study-surface-soft: rgba(244, 245, 246, 0.78);
+    --study-text: #161719;
+    --study-muted: #6e737a;
+    --study-line: rgba(22, 23, 25, 0.105);
+    --study-accent: #161719;
+    --study-shadow-soft: 0 16px 44px rgba(22, 23, 25, 0.06);
+    --study-shadow-card: 0 26px 70px rgba(22, 23, 25, 0.09);
+    --study-shadow-float: 0 20px 56px rgba(22, 23, 25, 0.13);
     --study-motion-fast: 150ms ease-out;
     --study-motion-page: 220ms ease-out;
     min-height: 100vh;
-    max-width: 760px;
+    max-width: 740px;
     margin: 0 auto;
-    padding: 42px 24px 120px;
+    padding: 46px 26px 120px;
     box-sizing: border-box;
     color: var(--study-text);
     background: var(--study-bg);
 }
 
 body:has(.study-app) {
-    background: #f7f5f0;
+    background: #f7f7f5;
     overflow-x: hidden;
 }
 
@@ -42,13 +46,17 @@ body:has(.study-app) {
 }
 
 .study-route-frame {
-    --study-bg: #f7f5f0;
-    --study-surface: rgba(255, 255, 255, 0.78);
-    --study-surface-strong: rgba(255, 255, 255, 0.92);
-    --study-text: #151719;
-    --study-muted: #6f747b;
-    --study-line: rgba(21, 23, 25, 0.12);
-    --study-accent: #17191c;
+    --study-bg: #f7f7f5;
+    --study-surface: rgba(255, 255, 255, 0.76);
+    --study-surface-strong: rgba(255, 255, 255, 0.94);
+    --study-surface-soft: rgba(244, 245, 246, 0.78);
+    --study-text: #161719;
+    --study-muted: #6e737a;
+    --study-line: rgba(22, 23, 25, 0.105);
+    --study-accent: #161719;
+    --study-shadow-soft: 0 16px 44px rgba(22, 23, 25, 0.06);
+    --study-shadow-card: 0 26px 70px rgba(22, 23, 25, 0.09);
+    --study-shadow-float: 0 20px 56px rgba(22, 23, 25, 0.13);
     --study-motion-fast: 150ms ease-out;
     --study-motion-page: 220ms ease-out;
     min-height: 100vh;
@@ -1212,7 +1220,7 @@ body:has(.study-app) {
     display: -webkit-box;
     max-width: 560px;
     overflow: hidden;
-    font-size: clamp(20px, 5.4vw, 25px);
+    font-size: 25px;
     line-height: 1.18;
     -webkit-box-orient: vertical;
     -webkit-line-clamp: 3;
@@ -2149,6 +2157,237 @@ body:has(.study-app) {
     color: #ffffff;
 }
 
+.study-topbar,
+.study-chat-header,
+.library-header {
+    color: var(--study-text);
+}
+
+.study-brand strong,
+.study-app .eyebrow,
+.section-kicker,
+.library-title-block span,
+.textbook-title-block span {
+    color: var(--study-muted);
+    letter-spacing: 0;
+}
+
+.study-hero h1,
+.library-title-block h1,
+.textbook-title-block h1 {
+    letter-spacing: 0;
+}
+
+.study-menu summary {
+    width: 40px;
+    height: 40px;
+    border-color: rgba(22, 23, 25, 0.08);
+    background: rgba(255, 255, 255, 0.92);
+    box-shadow: var(--study-shadow-soft);
+}
+
+.study-menu-panel,
+.route-loading,
+.selection-audio-panel {
+    border-color: rgba(22, 23, 25, 0.08);
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: var(--study-shadow-float);
+}
+
+.subject-form,
+.continue-card,
+.library-intro,
+.bookshelf-card,
+.textbook-card,
+.roadmap-subject-card,
+.textbook-toc,
+.understanding-panel,
+.answer-submit-card,
+.assessment-history,
+.review-plan-card,
+.roadmap-card,
+.textbook-reader,
+.textbook-updates,
+.textbook-preview-card,
+.study-context {
+    border-color: rgba(22, 23, 25, 0.085);
+    background: var(--study-surface-strong);
+    box-shadow: var(--study-shadow-soft);
+}
+
+.subject-form,
+.study-chat-form {
+    background: rgba(255, 255, 255, 0.96);
+}
+
+.subject-form input,
+.study-chat-form textarea,
+.language-practice-panel textarea,
+.answer-form textarea {
+    color: var(--study-text);
+}
+
+.subject-form input::placeholder,
+.study-chat-form textarea::placeholder,
+.answer-form textarea::placeholder {
+    color: rgba(22, 23, 25, 0.38);
+}
+
+.subject-form button,
+.study-chat-form button,
+.continue-card button,
+.review-suggestion-list button,
+.textbook-preview-actions button,
+.ask-teacher-button {
+    background: var(--study-accent);
+    box-shadow: 0 12px 28px rgba(22, 23, 25, 0.16);
+}
+
+.subject-form button:not(:disabled):hover,
+.study-chat-form button:not(:disabled):hover,
+.continue-card button:not(:disabled):hover,
+.review-suggestion-list button:not(:disabled):hover,
+.textbook-preview-actions button:not(:disabled):hover,
+.ask-teacher-button:not(:disabled):hover {
+    background: #24262a;
+}
+
+.subject-chips button,
+.lesson-actions button,
+.textbook-toc-list button,
+.roadmap-item,
+.review-suggestion-list article,
+.understanding-summary > div,
+.item-understanding,
+.roadmap-current-panel,
+.roadmap-materials,
+.roadmap-map,
+.language-practice-panel {
+    border-color: rgba(22, 23, 25, 0.08);
+    background: var(--study-surface-soft);
+}
+
+.subject-chips button:hover,
+.lesson-actions button:not(:disabled):hover,
+.textbook-toc-list button:hover,
+.roadmap-item:hover,
+.roadmap-item:focus-visible {
+    border-color: rgba(22, 23, 25, 0.16);
+    background: rgba(255, 255, 255, 0.9);
+}
+
+.bookshelf-card:hover,
+.bookshelf-card:focus-visible,
+.textbook-card:hover,
+.textbook-card:focus-visible,
+.continue-card:hover {
+    border-color: rgba(22, 23, 25, 0.16);
+    box-shadow: var(--study-shadow-card);
+}
+
+.study-history-row,
+.study-thread-card {
+    border-bottom-color: rgba(22, 23, 25, 0.08);
+}
+
+.study-history-row:hover,
+.study-history-row:focus-visible,
+.study-thread-card:hover,
+.study-thread-card:focus-visible {
+    background: rgba(22, 23, 25, 0.032);
+}
+
+.study-chat-header {
+    background: rgba(247, 247, 245, 0.88);
+    border-bottom: 1px solid rgba(22, 23, 25, 0.06);
+}
+
+.study-message {
+    padding: 13px 16px;
+    border-radius: 20px;
+    box-shadow: 0 10px 28px rgba(22, 23, 25, 0.055);
+}
+
+.student-message {
+    background: #1b1d20;
+    border-bottom-right-radius: 7px;
+}
+
+.teacher-message {
+    background: rgba(255, 255, 255, 0.96);
+    border-color: rgba(22, 23, 25, 0.08);
+    border-bottom-left-radius: 7px;
+}
+
+.language-audio-tools,
+.english-audio-tools {
+    border-color: rgba(22, 23, 25, 0.08);
+    background: rgba(255, 255, 255, 0.9);
+    box-shadow: 0 10px 26px rgba(22, 23, 25, 0.07);
+}
+
+.audio-play-button {
+    background: #1b1d20;
+    box-shadow: 0 8px 20px rgba(22, 23, 25, 0.14);
+}
+
+.secondary-audio-button,
+.audio-rate-select,
+.language-audio-label {
+    background: rgba(22, 23, 25, 0.055);
+}
+
+.study-chat-controls {
+    width: min(700px, calc(100% - 28px));
+}
+
+.study-chat-form {
+    border-color: rgba(22, 23, 25, 0.08);
+    box-shadow: var(--study-shadow-float);
+}
+
+.textbook-title-block {
+    display: grid;
+    gap: 8px;
+}
+
+.textbook-title-block h1 {
+    text-wrap: balance;
+}
+
+.textbook-reader {
+    padding: 28px;
+    border-radius: 28px;
+    background: rgba(255, 255, 255, 0.97);
+}
+
+.textbook-section {
+    padding-bottom: 22px;
+}
+
+.textbook-section h2,
+.textbook-updates h2 {
+    font-size: 21px;
+    letter-spacing: 0;
+}
+
+.textbook-section p,
+.textbook-updates p {
+    color: #232528;
+}
+
+.textbook-code-block {
+    background: #17191d;
+}
+
+.textbook-diagram-block {
+    background: rgba(22, 23, 25, 0.045);
+}
+
+.assessment-result-card {
+    background: #1b1d20;
+}
+
 @keyframes studySpin {
     to {
         transform: rotate(360deg);
@@ -2216,15 +2455,16 @@ body:has(.study-app) {
     .study-app {
         width: 100%;
         max-width: 100%;
-        padding: 28px 16px 112px;
+        padding: 30px 18px 116px;
     }
 
     .study-home {
-        gap: 36px;
+        gap: 34px;
     }
 
     .study-hero h1 {
-        font-size: 40px;
+        font-size: 38px;
+        line-height: 1.14;
     }
 
     .study-lead {
@@ -2235,6 +2475,7 @@ body:has(.study-app) {
         display: grid;
         gap: 8px;
         border-radius: 22px;
+        box-shadow: 0 16px 44px rgba(22, 23, 25, 0.075);
     }
 
     .subject-form input,
@@ -2292,7 +2533,7 @@ body:has(.study-app) {
 
     .study-textbook-page .textbook-title-block h1 {
         max-width: min(100%, 320px);
-        font-size: clamp(22px, 6.2vw, 27px);
+        font-size: 24px;
         line-height: 1.18;
         -webkit-line-clamp: 4;
     }
@@ -2302,7 +2543,8 @@ body:has(.study-app) {
     }
 
     .study-message {
-        max-width: 88%;
+        max-width: 90%;
+        padding: 12px 14px;
         font-size: 15px;
     }
 
@@ -2418,9 +2660,9 @@ body:has(.study-app) {
     }
 
     .textbook-reader {
-        gap: 14px;
-        padding: 14px;
-        border-radius: 20px;
+        gap: 16px;
+        padding: 18px;
+        border-radius: 22px;
     }
 
     .understanding-panel,
@@ -2504,16 +2746,17 @@ body:has(.study-app) {
     .textbook-section h2,
     .textbook-updates h2 {
         font-size: 18px;
+        line-height: 1.35;
     }
 
     .textbook-section {
-        padding-bottom: 15px;
+        padding-bottom: 18px;
     }
 
     .textbook-section p,
     .textbook-updates p {
         font-size: 15px;
-        line-height: 1.82;
+        line-height: 1.86;
     }
 
     .textbook-code-block,
