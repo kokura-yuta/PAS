@@ -765,6 +765,7 @@ body:has(.study-app) {
     line-height: 1.65;
     white-space: pre-wrap;
     animation: studyMessageIn 190ms ease-out both;
+    box-shadow: 0 12px 28px rgba(21, 23, 25, 0.06);
 }
 
 .study-message p {
@@ -791,16 +792,33 @@ body:has(.study-app) {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
+    width: fit-content;
+    max-width: 100%;
+    box-sizing: border-box;
     margin-top: 12px;
+    padding: 6px;
+    border: 1px solid rgba(21, 23, 25, 0.08);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.72);
+    box-shadow: 0 12px 30px rgba(21, 23, 25, 0.08);
+    backdrop-filter: blur(14px);
+}
+
+.language-audio-textbook {
+    width: 100%;
+    border-radius: 20px;
+    align-items: flex-start;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.82);
 }
 
 .audio-play-button,
 .audio-rate-select {
-    min-height: 34px;
-    border: 1px solid var(--study-line);
+    min-height: 32px;
+    border: 0;
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.82);
+    background: rgba(21, 23, 25, 0.07);
     color: var(--study-text);
     font: inherit;
     font-size: 12px;
@@ -808,22 +826,32 @@ body:has(.study-app) {
 }
 
 .audio-play-button {
-    padding: 0 14px;
+    padding: 0 13px;
+    background: var(--study-accent);
+    color: #ffffff;
+    box-shadow: 0 8px 18px rgba(21, 23, 25, 0.16);
     cursor: pointer;
-    transition: transform 150ms ease-out, background-color 150ms ease-out, opacity 150ms ease-out;
+    transition:
+        transform 150ms ease-out,
+        background-color 150ms ease-out,
+        opacity 150ms ease-out,
+        box-shadow 150ms ease-out;
 }
 
 .audio-play-button:active {
     transform: scale(0.97);
-    background: rgba(21, 23, 25, 0.08);
+    box-shadow: 0 4px 12px rgba(21, 23, 25, 0.12);
 }
 
 .secondary-audio-button {
-    background: rgba(21, 23, 25, 0.045);
+    background: rgba(21, 23, 25, 0.055);
+    color: var(--study-text);
+    box-shadow: none;
 }
 
 .audio-rate-select {
-    padding: 0 10px;
+    padding: 0 11px;
+    outline: none;
 }
 
 .language-audio-label {
@@ -836,6 +864,25 @@ body:has(.study-app) {
     color: var(--study-muted);
     font-size: 11px;
     font-weight: 850;
+}
+
+.student-message .language-audio-tools {
+    border-color: rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: none;
+}
+
+.student-message .audio-play-button {
+    background: rgba(255, 255, 255, 0.92);
+    color: #151719;
+    box-shadow: none;
+}
+
+.student-message .secondary-audio-button,
+.student-message .audio-rate-select,
+.student-message .language-audio-label {
+    background: rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.9);
 }
 
 .language-practice-actions {

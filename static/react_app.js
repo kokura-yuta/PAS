@@ -178,19 +178,56 @@
         }) || null;
     }
 
+    function isConversationAudioLanguage(language) {
+        return Boolean(language && ["english", "korean", "chinese"].includes(language.key));
+    }
+
+    function hasConversationLanguageAudioText(text, contextLabel) {
+        const value = String(text || "");
+        const contextLanguage = getLanguageContext(contextLabel);
+
+        if (LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)) {
+            return true;
+        }
+
+        if (isConversationAudioLanguage(contextLanguage) && contextLanguage.textPattern.test(value)) {
+            return true;
+        }
+
+        if ((value.match(/[\uAC00-\uD7AF]/g) || []).length >= 2) {
+            return true;
+        }
+
+        const chineseCharacters = (value.match(/[\u4E00-\u9FFF]/g) || []).length;
+        const japaneseKana = /[\u3040-\u30ff]/.test(value);
+
+        if (chineseCharacters >= 2 && !japaneseKana) {
+            return true;
+        }
+
+        const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+        const englishCharacters = words.join("").length;
+        const totalCharacters = value.replace(/\s/g, "").length || 1;
+
+        return words.length >= 3 && englishCharacters >= 12 && englishCharacters / totalCharacters > 0.35;
+    }
+
     function detectLanguageFromText(text) {
         const value = String(text || "");
+        const detectionValue = LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)
+            ? value.replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
+            : value;
 
-        if (/[\uAC00-\uD7AF]/.test(value)) {
+        if (/[\uAC00-\uD7AF]/.test(detectionValue)) {
             return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
                 return language.key === "korean";
             });
         }
 
-        if (/[A-Za-z][A-Za-z'’-]*/.test(value)) {
-            const words = value.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
+        if (/[A-Za-z][A-Za-z'’-]*/.test(detectionValue)) {
+            const words = detectionValue.match(/[A-Za-z][A-Za-z'’-]*/g) || [];
             const englishCharacters = words.join("").length;
-            const totalCharacters = value.replace(/\s/g, "").length || 1;
+            const totalCharacters = detectionValue.replace(/\s/g, "").length || 1;
 
             if (
                 englishCharacters >= 2 &&
@@ -206,13 +243,13 @@
             }
         }
 
-        if (/[\u3040-\u30ff]/.test(value)) {
+        if (/[\u3040-\u30ff]/.test(detectionValue)) {
             return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
                 return language.key === "japanese";
             });
         }
 
-        if (/[\u4E00-\u9FFF]/.test(value)) {
+        if (/[\u4E00-\u9FFF]/.test(detectionValue)) {
             return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
                 return language.key === "chinese";
             });
@@ -261,7 +298,7 @@
         }
 
         if (sourceType === "chat") {
-            return LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value);
+            return hasConversationLanguageAudioText(value, context);
         }
 
         if (sourceType === "selection") {
@@ -304,6 +341,42 @@
         return language.textPattern.test(line);
     }
 
+    function extractLanguageSnippetFromLine(line, language) {
+        const cleanedLine = String(line || "")
+            .replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
+            .trim();
+
+        if (!cleanedLine) {
+            return "";
+        }
+
+        if (language.key === "english") {
+            const englishChunks = cleanedLine.match(/[A-Za-z][A-Za-z'’-]*(?:[\s,.!?;:]+[A-Za-z][A-Za-z'’-]*)*/g) || [];
+            return englishChunks.join(" ").replace(/\s+/g, " ").trim();
+        }
+
+        if (language.key === "korean") {
+            const koreanChunks = cleanedLine.match(/[\uAC00-\uD7AF][\uAC00-\uD7AF\s,.!?！？。]*/g) || [];
+            return koreanChunks.join(" ").replace(/\s+/g, " ").trim();
+        }
+
+        if (language.key === "chinese") {
+            const chineseChunks = cleanedLine
+                .match(/[\u4E00-\u9FFF][\u4E00-\u9FFF\s，。！？,.!?]*/g) || [];
+            return chineseChunks
+                .map(function (chunk) {
+                    return chunk.trim();
+                })
+                .filter(function (chunk) {
+                    return chunk.length >= 2 && !/^(中国語|中文|漢字)$/.test(chunk);
+                })
+                .join(" ")
+                .trim();
+        }
+
+        return cleanedLine;
+    }
+
     function extractLanguageAudioText(text, language, contextLabel, sourceType) {
         const value = String(text || "");
         const context = String(contextLabel || "");
@@ -326,7 +399,7 @@
                     return false;
                 }
 
-                if (!lineMatchesLanguage(line, language)) {
+                if (!lineMatchesLanguage(line, language) && !(sourceType === "chat" && language.textPattern.test(line))) {
                     return false;
                 }
 
@@ -335,6 +408,10 @@
                 }
 
                 if (sourceType === "chat") {
+                    if (!LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)) {
+                        return true;
+                    }
+
                     const nearbyInstruction = [
                         rawLines[index - 2] || "",
                         rawLines[index - 1] || "",
@@ -359,7 +436,7 @@
                 return true;
             })
             .map(function (line) {
-                return line.replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]\s*/, "").trim();
+                return extractLanguageSnippetFromLine(line, language);
             })
             .filter(Boolean);
 
@@ -498,6 +575,7 @@
 
         const activeSentence = target.sentences[Math.min(sentenceIndex, target.sentences.length - 1)] || target.text;
         const canUseRecognition = Boolean(getSpeechRecognitionConstructor());
+        const showPracticeTools = sourceType === "textbook";
 
         function stopAudio() {
             window.speechSynthesis.cancel();
@@ -611,7 +689,7 @@
 
         return h(
             "div",
-            { className: "language-audio-tools" },
+            { className: `language-audio-tools language-audio-${sourceType}` },
             h(
                 "button",
                 {
@@ -659,44 +737,46 @@
                 h("option", { value: "1.25" }, "1.25x")
             ),
             h("span", { className: "language-audio-label" }, target.language.label),
-            h(
-                "div",
-                { className: "language-practice-actions" },
-                h(
-                    "button",
-                    {
-                        type: "button",
-                        onClick: function () {
-                            setPracticeMode(practiceMode === "shadowing" ? "" : "shadowing");
-                            setPracticeResult("");
-                        }
-                    },
-                    "シャドーイング"
-                ),
-                h(
-                    "button",
-                    {
-                        type: "button",
-                        onClick: function () {
-                            setPracticeMode(practiceMode === "dictation" ? "" : "dictation");
-                            setPracticeResult("");
-                        }
-                    },
-                    "ディクテーション"
-                ),
-                h(
-                    "button",
-                    {
-                        type: "button",
-                        onClick: function () {
-                            setPracticeMode(practiceMode === "pronunciation" ? "" : "pronunciation");
-                            setPracticeResult("");
-                        }
-                    },
-                    "発音チェック"
+            showPracticeTools
+                ? h(
+                    "div",
+                    { className: "language-practice-actions" },
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            onClick: function () {
+                                setPracticeMode(practiceMode === "shadowing" ? "" : "shadowing");
+                                setPracticeResult("");
+                            }
+                        },
+                        "シャドーイング"
+                    ),
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            onClick: function () {
+                                setPracticeMode(practiceMode === "dictation" ? "" : "dictation");
+                                setPracticeResult("");
+                            }
+                        },
+                        "ディクテーション"
+                    ),
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            onClick: function () {
+                                setPracticeMode(practiceMode === "pronunciation" ? "" : "pronunciation");
+                                setPracticeResult("");
+                            }
+                        },
+                        "発音チェック"
+                    )
                 )
-            ),
-            practiceMode
+                : null,
+            showPracticeTools && practiceMode
                 ? h(
                     "div",
                     { className: "language-practice-panel" },
@@ -2715,7 +2795,7 @@
                             const isStreamingPlaceholder = chat.temp_id && !chat.content;
                             const messageText = chat.content || (isStreamingPlaceholder ? "先生が考えています" : "");
                             const audioContext = chatData && chatData.thread ? chatData.thread.title : "";
-                            const hasManualAudioRequest = LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(messageText);
+                            const hasLanguageAudioTarget = hasConversationLanguageAudioText(messageText, audioContext);
                             return h(
                                 "div",
                                 {
@@ -2723,11 +2803,11 @@
                                     className: `study-message ${chat.role === "user" ? "student-message" : "teacher-message"}${isStreamingPlaceholder ? " thinking-message" : ""}`
                                 },
                                 h("p", null, messageText),
-                                hasManualAudioRequest && !isStreamingPlaceholder
+                                hasLanguageAudioTarget && !isStreamingPlaceholder
                                     ? h(LanguageAudioTools, {
                                         text: messageText,
                                         contextLabel: audioContext,
-                                        label: "音声",
+                                        label: "聞く",
                                         sourceType: "chat"
                                     })
                                     : null
