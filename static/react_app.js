@@ -192,7 +192,14 @@
             const englishCharacters = words.join("").length;
             const totalCharacters = value.replace(/\s/g, "").length || 1;
 
-            if (words.length >= 3 && englishCharacters >= 12 && englishCharacters / totalCharacters > 0.35) {
+            if (
+                englishCharacters >= 2 &&
+                (
+                    LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value) ||
+                    words.length === 1 ||
+                    (words.length >= 3 && englishCharacters >= 12 && englishCharacters / totalCharacters > 0.35)
+                )
+            ) {
                 return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
                     return language.key === "english";
                 });
@@ -217,8 +224,9 @@
     function detectLanguageTarget(text, contextLabel, sourceType) {
         const contextLanguage = getLanguageContext(contextLabel);
         const textLanguage = detectLanguageFromText(text);
+        const allowJapaneseFromText = sourceType === "selection";
         const language = contextLanguage || (
-            textLanguage && textLanguage.key !== "japanese"
+            textLanguage && (textLanguage.key !== "japanese" || allowJapaneseFromText)
                 ? textLanguage
                 : null
         );
@@ -254,6 +262,10 @@
 
         if (sourceType === "chat") {
             return LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value);
+        }
+
+        if (sourceType === "selection") {
+            return Boolean(value.trim());
         }
 
         return LANGUAGE_AUDIO_SECTION_PATTERN.test(context) || LANGUAGE_AUDIO_TEXT_PATTERN.test(value);
@@ -318,6 +330,10 @@
                     return false;
                 }
 
+                if (sourceType === "selection") {
+                    return true;
+                }
+
                 if (sourceType === "chat") {
                     const nearbyInstruction = [
                         rawLines[index - 2] || "",
@@ -341,7 +357,11 @@
                 }
 
                 return true;
-            });
+            })
+            .map(function (line) {
+                return line.replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]\s*/, "").trim();
+            })
+            .filter(Boolean);
 
         return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1800);
     }
@@ -493,6 +513,9 @@
 
             setError("");
             window.speechSynthesis.cancel();
+            if (window.speechSynthesis.paused) {
+                window.speechSynthesis.resume();
+            }
             window.dispatchEvent(
                 new CustomEvent("pas-language-audio-start", {
                     detail: { id: audioIdRef.current }
@@ -500,7 +523,14 @@
             );
 
             const utterance = new SpeechSynthesisUtterance(speechText);
+            const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+            const matchingVoice = voices.find(function (voice) {
+                return voice.lang && voice.lang.toLowerCase().startsWith(target.language.lang.slice(0, 2).toLowerCase());
+            });
             utterance.lang = target.language.lang;
+            if (matchingVoice) {
+                utterance.voice = matchingVoice;
+            }
             utterance.rate = Number(rate);
             utterance.onstart = function () {
                 setStatus("playing");
@@ -707,6 +737,44 @@
                 )
                 : null,
             error ? h("p", { className: "audio-error" }, error) : null
+        );
+    }
+
+    function SelectionAudioPanel(props) {
+        const text = String(props.text || "").trim();
+
+        if (!text) {
+            return null;
+        }
+
+        return h(
+            "aside",
+            { className: "selection-audio-panel", "aria-live": "polite" },
+            h(
+                "div",
+                { className: "selection-audio-preview" },
+                h("span", null, "選択した文章"),
+                h("p", null, text.length > 120 ? `${text.slice(0, 120)}...` : text)
+            ),
+            h(
+                "div",
+                { className: "selection-audio-actions" },
+                h(LanguageAudioTools, {
+                    text: text,
+                    contextLabel: "選択した言語テキスト",
+                    label: "選択部分を聞く",
+                    sourceType: "selection"
+                }),
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "selection-audio-close",
+                        onClick: props.onClear
+                    },
+                    "閉じる"
+                )
+            )
         );
     }
 
@@ -2125,6 +2193,7 @@
         const [textbookPreview, setTextbookPreview] = useState(null);
         const [previewingTextbook, setPreviewingTextbook] = useState(false);
         const [savingTextbook, setSavingTextbook] = useState(false);
+        const [selectedAudioText, setSelectedAudioText] = useState("");
         const fileInputRef = useRef(null);
         const abortControllerRef = useRef(null);
         const streamingAssistantRef = useRef("");
@@ -2140,6 +2209,7 @@
             setError("");
             setFile(null);
             setTextbookPreview(null);
+            setSelectedAudioText("");
 
             api(apiPath)
                 .then(function (data) {
@@ -2352,6 +2422,21 @@
 
         function sendLessonAction(action) {
             postTextMessage(action.message, action.label);
+        }
+
+        function captureSelectedAudioText() {
+            const selection = window.getSelection ? window.getSelection() : null;
+            const selectedText = selection ? selection.toString().trim() : "";
+
+            if (selectedText.length < 2) {
+                return;
+            }
+
+            setSelectedAudioText(selectedText.slice(0, 1000));
+        }
+
+        function captureSelectedAudioTextSoon() {
+            window.setTimeout(captureSelectedAudioText, 90);
         }
 
         function handleMessageKeyDown(event) {
@@ -2618,7 +2703,11 @@
             error ? h("p", { className: "notice" }, error) : null,
             h(
                 "section",
-                { className: "study-chat-log" },
+                {
+                    className: "study-chat-log",
+                    onMouseUp: captureSelectedAudioText,
+                    onTouchEnd: captureSelectedAudioTextSoon
+                },
                 !chatData
                     ? h("div", { className: "study-message teacher-message" }, h("p", null, "読み込み中"))
                     : messages.length
@@ -2626,6 +2715,7 @@
                             const isStreamingPlaceholder = chat.temp_id && !chat.content;
                             const messageText = chat.content || (isStreamingPlaceholder ? "先生が考えています" : "");
                             const audioContext = chatData && chatData.thread ? chatData.thread.title : "";
+                            const hasManualAudioRequest = LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(messageText);
                             return h(
                                 "div",
                                 {
@@ -2633,7 +2723,7 @@
                                     className: `study-message ${chat.role === "user" ? "student-message" : "teacher-message"}${isStreamingPlaceholder ? " thinking-message" : ""}`
                                 },
                                 h("p", null, messageText),
-                                chat.role === "assistant" && !isStreamingPlaceholder
+                                hasManualAudioRequest && !isStreamingPlaceholder
                                     ? h(LanguageAudioTools, {
                                         text: messageText,
                                         contextLabel: audioContext,
@@ -2652,6 +2742,14 @@
                     ? h(ThinkingBubble, { label: sendingLabel })
                     : null
             ),
+            selectedAudioText
+                ? h(SelectionAudioPanel, {
+                    text: selectedAudioText,
+                    onClear: function () {
+                        setSelectedAudioText("");
+                    }
+                })
+                : null,
             textbookPreview
                 ? h(
                     "section",

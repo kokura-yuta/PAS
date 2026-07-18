@@ -2105,12 +2105,30 @@ def build_review_suggestions(understandings, limit=4):
     )[:limit]
 
 
+def get_textbook_section_content(textbook, field_name):
+    content = (getattr(textbook, field_name) or "").strip()
+
+    if content:
+        return content
+
+    if not is_language_learning_subject(textbook.subject):
+        return ""
+
+    if field_name == "listening_questions":
+        return build_language_listening_questions(textbook.subject)
+
+    if field_name == "pronunciation_questions":
+        return build_language_pronunciation_questions(textbook.subject)
+
+    return ""
+
+
 def serialize_textbook_detail(textbook, updates=None, understandings=None, assessments=None):
     sections = [
         {
             "key": field_name,
             "label": TEXTBOOK_FIELD_LABELS[field_name],
-            "content": getattr(textbook, field_name) or ""
+            "content": get_textbook_section_content(textbook, field_name)
         }
         for field_name in TEXTBOOK_CONTENT_FIELDS
     ]
@@ -3328,6 +3346,109 @@ def is_language_learning_subject(subject):
     ) or subject_text.lower() in ["english", "korean", "chinese", "japanese"]
 
 
+def detect_language_learning_key(subject):
+    subject_text = subject or ""
+    lower_subject = subject_text.lower()
+
+    if any(word in subject_text for word in ["韓国語", "ハングル"]) or lower_subject == "korean":
+        return "korean"
+
+    if any(word in subject_text for word in ["中国語", "中文", "HSK"]) or lower_subject == "chinese":
+        return "chinese"
+
+    if any(word in subject_text for word in ["日本語", "JLPT"]) or lower_subject == "japanese":
+        return "japanese"
+
+    if any(word in subject_text for word in ["英語", "英文", "英単語", "TOEIC"]) or lower_subject == "english":
+        return "english"
+
+    return None
+
+
+LANGUAGE_LISTENING_EXAMPLES = {
+    "english": [
+        "I study English every morning.",
+        "Could you explain this sentence again?",
+        "The train was delayed because of heavy rain.",
+        "She has been learning Python for two months.",
+        "I would like to improve my listening skills.",
+        "Please choose the best answer.",
+        "The meeting starts at nine thirty.",
+        "He forgot to bring his notebook.",
+        "This problem is easier than I expected.",
+        "I want to speak more naturally."
+    ],
+    "korean": [
+        "저는 매일 한국어를 공부해요.",
+        "이 문장을 다시 설명해 주세요.",
+        "오늘 날씨가 정말 좋아요.",
+        "저는 듣기 연습을 하고 싶어요.",
+        "다음 문장을 따라 읽어 보세요.",
+        "어제 친구와 카페에 갔어요.",
+        "시험까지 시간이 얼마 남지 않았어요.",
+        "천천히 말해 주세요.",
+        "이 단어의 뜻을 알고 싶어요.",
+        "한국어로 자연스럽게 말하고 싶어요."
+    ],
+    "chinese": [
+        "我每天学习中文。",
+        "请再解释一遍这个句子。",
+        "今天的天气很好。",
+        "我想练习听力。",
+        "请跟着读下面的句子。",
+        "昨天我和朋友去了咖啡店。",
+        "考试快到了。",
+        "请说慢一点。",
+        "我想知道这个词的意思。",
+        "我想说得更自然。"
+    ],
+    "japanese": [
+        "私は毎日日本語を勉強します。",
+        "この文をもう一度説明してください。",
+        "今日は天気がとてもいいです。",
+        "聞き取りの練習をしたいです。",
+        "次の文をまねして読んでください。",
+        "昨日、友達とカフェに行きました。",
+        "試験まであまり時間がありません。",
+        "ゆっくり話してください。",
+        "この言葉の意味を知りたいです。",
+        "もっと自然に話したいです。"
+    ]
+}
+
+
+LANGUAGE_PRONUNCIATION_EXAMPLES = {
+    "english": ["practice", "understand", "environment", "conversation", "pronunciation"],
+    "korean": ["안녕하세요", "괜찮아요", "공부해요", "설명해 주세요", "자연스럽게"],
+    "chinese": ["你好", "谢谢", "学习", "请再说一遍", "自然地"],
+    "japanese": ["こんにちは", "ありがとうございます", "勉強します", "もう一度お願いします", "自然に話します"]
+}
+
+
+def build_language_listening_questions(subject):
+    language_key = detect_language_learning_key(subject) or "english"
+    examples = LANGUAGE_LISTENING_EXAMPLES[language_key]
+
+    return "\n".join(
+        [
+            f"{index}. 音声を聞いて、聞こえた内容を書いてください。\n音声用: {sentence}"
+            for index, sentence in enumerate(examples, start=1)
+        ]
+    )
+
+
+def build_language_pronunciation_questions(subject):
+    language_key = detect_language_learning_key(subject) or "english"
+    examples = LANGUAGE_PRONUNCIATION_EXAMPLES[language_key]
+
+    return "\n".join(
+        [
+            f"{index}. 音声を聞いたあと、同じ発音で読んでください。\n音声用: {phrase}"
+            for index, phrase in enumerate(examples, start=1)
+        ]
+    )
+
+
 def normalize_lesson_level(level):
     return level if level in LESSON_LEVEL_ORDER else "term"
 
@@ -3746,12 +3867,8 @@ def fallback_textbook_preview(thread, user_id, source_material):
     first_existing = existing_textbooks[0] if existing_textbooks else None
     action_mode = "update" if first_existing else "create"
     language_subject = is_language_learning_subject(thread.title)
-    fallback_listening = "\n".join(
-        [f"{index}. 音声を聞いて、聞こえた単語または文を書いてください。" for index in range(1, 11)]
-    ) if language_subject else ""
-    fallback_pronunciation = "\n".join(
-        [f"{index}. 先生の音声を聞いたあと、同じ発音で読んでください。" for index in range(1, 6)]
-    ) if language_subject else ""
+    fallback_listening = build_language_listening_questions(thread.title) if language_subject else ""
+    fallback_pronunciation = build_language_pronunciation_questions(thread.title) if language_subject else ""
 
     return {
         "mode": action_mode,
@@ -3819,6 +3936,12 @@ def normalize_textbook_preview(raw_data, thread, user_id):
             value = "\n".join([str(item).strip() for item in value if str(item).strip()])
         preview[field_name] = (value or "").strip()
 
+    if is_language_learning_subject(subject):
+        if not preview["listening_questions"]:
+            preview["listening_questions"] = build_language_listening_questions(subject)
+        if not preview["pronunciation_questions"]:
+            preview["pronunciation_questions"] = build_language_pronunciation_questions(subject)
+
     return preview
 
 
@@ -3856,6 +3979,7 @@ def create_textbook_preview(thread, user_id, source_note=""):
 - 科目に合わせて最適な教材を選ぶ。英語・韓国語・中国語・日本語なら単語問題、リスニング、発音、シャドーイング向け例文を入れる。
 - 英語・韓国語・中国語・日本語などの言語教材では、listening_questions にリスニング用問題を必ず10問作る。
 - 言語教材では、pronunciation_questions に発音問題を必ず5問作る。
+- listening_questions と pronunciation_questions では、必ず各問題に「音声用: 読み上げる文」を含める。
 - 言語教材の音声対象は listening_questions と pronunciation_questions だけにする。他の説明・例文・本文へ音声を付ける前提で書かない。
 - 言語以外の教材では listening_questions と pronunciation_questions は空欄でよい。
 - 数学なら、式だけでなくグラフ、図形、数直線、表、途中式の流れを visual_diagram に入れる。
