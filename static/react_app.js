@@ -125,6 +125,9 @@
         "授業の進め方を準備しています"
     ];
 
+    const KOREAN_CHARACTER_PATTERN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF]/;
+    const KOREAN_CHARACTER_GLOBAL_PATTERN = /[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF]/g;
+
     const LANGUAGE_AUDIO_CONTEXTS = [
         {
             key: "english",
@@ -138,7 +141,7 @@
             label: "韓国語",
             lang: "ko-KR",
             contextPattern: /韓国語|ハングル|Korean/i,
-            textPattern: /[\uAC00-\uD7AF]/
+            textPattern: KOREAN_CHARACTER_PATTERN
         },
         {
             key: "chinese",
@@ -194,7 +197,7 @@
             return true;
         }
 
-        if ((value.match(/[\uAC00-\uD7AF]/g) || []).length >= 2) {
+        if ((value.match(KOREAN_CHARACTER_GLOBAL_PATTERN) || []).length >= 1) {
             return true;
         }
 
@@ -218,7 +221,7 @@
             ? value.replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
             : value;
 
-        if (/[\uAC00-\uD7AF]/.test(detectionValue)) {
+        if (KOREAN_CHARACTER_PATTERN.test(detectionValue)) {
             return LANGUAGE_AUDIO_CONTEXTS.find(function (language) {
                 return language.key === "korean";
             });
@@ -324,7 +327,7 @@
         }
 
         if (language.key === "korean") {
-            return (line.match(/[\uAC00-\uD7AF]/g) || []).length >= 2;
+            return (line.match(KOREAN_CHARACTER_GLOBAL_PATTERN) || []).length >= 1;
         }
 
         if (language.key === "chinese") {
@@ -344,6 +347,7 @@
     function extractLanguageSnippetFromLine(line, language) {
         const cleanedLine = String(line || "")
             .replace(/^.*?(音声用|再生用|読み上げ用)\s*[:：]?\s*/, "")
+            .replace(/^[\s"'“”‘’「『（(]*(?:[A-DＡ-Ｄ]|[ア-エ]|[0-9０-９]+|Q|Question|問|問題)\s*[:：.)．、]\s*/i, "")
             .trim();
 
         if (!cleanedLine) {
@@ -356,7 +360,7 @@
         }
 
         if (language.key === "korean") {
-            const koreanChunks = cleanedLine.match(/[\uAC00-\uD7AF][\uAC00-\uD7AF\s,.!?！？。]*/g) || [];
+            const koreanChunks = cleanedLine.match(/[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF][\u1100-\u11FF\u3130-\u318F\uAC00-\uD7AF\uA960-\uA97F\uD7B0-\uD7FF\s,.!?！？。]*/g) || [];
             return koreanChunks.join(" ").replace(/\s+/g, " ").trim();
         }
 
@@ -380,6 +384,7 @@
     function extractLanguageAudioText(text, language, contextLabel, sourceType) {
         const value = String(text || "");
         const context = String(contextLabel || "");
+        const hasManualRequest = LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value);
         const contextIsExerciseSection = sourceType === "textbook"
             ? LANGUAGE_AUDIO_TEXTBOOK_SECTION_PATTERN.test(context)
             : LANGUAGE_AUDIO_SECTION_PATTERN.test(context);
@@ -389,6 +394,9 @@
                 return line.trim();
             })
             .filter(Boolean);
+        const manualMarkerIndex = rawLines.findIndex(function (line) {
+            return LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(line);
+        });
         const lines = rawLines
             .filter(function (line, index) {
                 if (!line) {
@@ -408,17 +416,10 @@
                 }
 
                 if (sourceType === "chat") {
-                    if (!LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(value)) {
+                    if (!hasManualRequest) {
                         return true;
                     }
-
-                    const nearbyInstruction = [
-                        rawLines[index - 2] || "",
-                        rawLines[index - 1] || "",
-                        line
-                    ].join(" ");
-
-                    if (!LANGUAGE_AUDIO_MANUAL_REQUEST_PATTERN.test(nearbyInstruction)) {
+                    if (manualMarkerIndex >= 0 && index < manualMarkerIndex) {
                         return false;
                     }
                 } else if (!contextIsExerciseSection) {
@@ -440,7 +441,30 @@
             })
             .filter(Boolean);
 
-        return lines.join(" ").replace(/\s+/g, " ").trim().slice(0, 1800);
+        return normalizeLanguageAudioPlaybackText(lines, language).slice(0, 1800);
+    }
+
+    function normalizeLanguageAudioPlaybackText(lines, language) {
+        const values = (Array.isArray(lines) ? lines : [lines])
+            .map(function (line) {
+                return String(line || "").replace(/[ \t]+/g, " ").trim();
+            })
+            .filter(Boolean);
+
+        if (!values.length) {
+            return "";
+        }
+
+        if (language.key === "english") {
+            return values
+                .map(function (line) {
+                    return line.replace(/\s+([,.!?;:])/g, "$1").trim();
+                })
+                .join("\n")
+                .trim();
+        }
+
+        return values.join("\n").trim();
     }
 
     function splitLanguageSentences(text, language) {
@@ -453,7 +477,12 @@
         const sentencePattern = language.key === "english"
             ? /[^.!?\n]+[.!?]?/g
             : /[^。！？.!?\n]+[。！？.!?]?/g;
-        const sentences = value.match(sentencePattern) || [value];
+        const sentences = value
+            .split(/\n+/)
+            .flatMap(function (line) {
+                const trimmedLine = line.trim();
+                return trimmedLine.match(sentencePattern) || (trimmedLine ? [trimmedLine] : []);
+            });
 
         return sentences
             .map(function (sentence) {
@@ -461,6 +490,47 @@
             })
             .filter(Boolean)
             .slice(0, 20);
+    }
+
+    function buildSpeechSegments(text, language) {
+        const value = String(text || "").replace(/\r/g, "").trim();
+
+        if (!value) {
+            return [];
+        }
+
+        const lines = value
+            .split(/\n+/)
+            .map(function (line) {
+                return line.trim();
+            })
+            .filter(Boolean);
+        const segments = [];
+
+        lines.forEach(function (line, lineIndex) {
+            const parts = language.key === "english"
+                ? line.split(/,\s*/).map(function (part) {
+                    return part.trim();
+                }).filter(Boolean)
+                : [line];
+
+            parts.forEach(function (part, partIndex) {
+                const isLastPartInLine = partIndex === parts.length - 1;
+                const isLastLine = lineIndex === lines.length - 1;
+                const pauseAfter = !isLastPartInLine
+                    ? 260
+                    : !isLastLine
+                        ? 520
+                        : 0;
+
+                segments.push({
+                    text: part,
+                    pauseAfter: pauseAfter
+                });
+            });
+        });
+
+        return segments;
     }
 
     function normalizeAnswerText(text, language) {
@@ -538,6 +608,8 @@
         const [practiceResult, setPracticeResult] = useState("");
         const [recognitionStatus, setRecognitionStatus] = useState("idle");
         const audioIdRef = useRef(`language-audio-${Math.random().toString(36).slice(2)}`);
+        const playbackTokenRef = useRef(0);
+        const playbackTimerRef = useRef(null);
         const recognitionRef = useRef(null);
         const target = detectLanguageTarget(text, contextLabel, sourceType);
 
@@ -566,6 +638,11 @@
                         recognitionRef.current = null;
                     }
                 }
+
+                if (playbackTimerRef.current) {
+                    window.clearTimeout(playbackTimerRef.current);
+                    playbackTimerRef.current = null;
+                }
             };
         }, []);
 
@@ -578,6 +655,11 @@
         const showPracticeTools = sourceType === "textbook";
 
         function stopAudio() {
+            playbackTokenRef.current += 1;
+            if (playbackTimerRef.current) {
+                window.clearTimeout(playbackTimerRef.current);
+                playbackTimerRef.current = null;
+            }
             window.speechSynthesis.cancel();
             setStatus("idle");
             window.dispatchEvent(new CustomEvent("pas-language-audio-stop"));
@@ -589,7 +671,20 @@
                 return;
             }
 
+            const segments = buildSpeechSegments(speechText, target.language);
+
+            if (!segments.length) {
+                setError("再生できる文章が見つかりませんでした。");
+                return;
+            }
+
             setError("");
+            playbackTokenRef.current += 1;
+            const playbackToken = playbackTokenRef.current;
+            if (playbackTimerRef.current) {
+                window.clearTimeout(playbackTimerRef.current);
+                playbackTimerRef.current = null;
+            }
             window.speechSynthesis.cancel();
             if (window.speechSynthesis.paused) {
                 window.speechSynthesis.resume();
@@ -600,29 +695,65 @@
                 })
             );
 
-            const utterance = new SpeechSynthesisUtterance(speechText);
             const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
             const matchingVoice = voices.find(function (voice) {
                 return voice.lang && voice.lang.toLowerCase().startsWith(target.language.lang.slice(0, 2).toLowerCase());
             });
-            utterance.lang = target.language.lang;
-            if (matchingVoice) {
-                utterance.voice = matchingVoice;
-            }
-            utterance.rate = Number(rate);
-            utterance.onstart = function () {
-                setStatus("playing");
-            };
-            utterance.onend = function () {
-                setStatus("idle");
-            };
-            utterance.onerror = function () {
-                setStatus("idle");
-                setError("音声を再生できませんでした。もう一度試してください。");
-            };
-
+            let segmentIndex = 0;
             setStatus("loading");
-            window.speechSynthesis.speak(utterance);
+
+            function speakNextSegment() {
+                if (playbackTokenRef.current !== playbackToken) {
+                    return;
+                }
+
+                const segment = segments[segmentIndex];
+
+                if (!segment) {
+                    setStatus("idle");
+                    return;
+                }
+
+                const utterance = new SpeechSynthesisUtterance(segment.text);
+                utterance.lang = target.language.lang;
+
+                if (matchingVoice) {
+                    utterance.voice = matchingVoice;
+                }
+
+                utterance.rate = Number(rate);
+                utterance.onstart = function () {
+                    if (playbackTokenRef.current === playbackToken) {
+                        setStatus("playing");
+                    }
+                };
+                utterance.onend = function () {
+                    if (playbackTokenRef.current !== playbackToken) {
+                        return;
+                    }
+
+                    segmentIndex += 1;
+
+                    if (segmentIndex >= segments.length) {
+                        setStatus("idle");
+                        return;
+                    }
+
+                    playbackTimerRef.current = window.setTimeout(speakNextSegment, segment.pauseAfter);
+                };
+                utterance.onerror = function () {
+                    if (playbackTokenRef.current !== playbackToken) {
+                        return;
+                    }
+
+                    setStatus("idle");
+                    setError("音声を再生できませんでした。もう一度試してください。");
+                };
+
+                window.speechSynthesis.speak(utterance);
+            }
+
+            speakNextSegment();
         }
 
         function playCurrentSentence() {
