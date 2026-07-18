@@ -586,6 +586,10 @@
         const target = detectLanguageTarget(text, contextLabel, sourceType);
 
         useEffect(function () {
+            setSentenceIndex(0);
+        }, [target ? target.text : ""]);
+
+        useEffect(function () {
             function handleAudioStart(event) {
                 if (!event.detail || event.detail.id !== audioIdRef.current) {
                     setStatus("idle");
@@ -625,6 +629,9 @@
         const activeSentence = target.sentences[Math.min(sentenceIndex, target.sentences.length - 1)] || target.text;
         const canUseRecognition = Boolean(getSpeechRecognitionConstructor());
         const showPracticeTools = sourceType === "textbook";
+        const sentenceCount = target.sentences.length;
+        const hasMultipleSentences = sentenceCount > 1;
+        const currentSentenceNumber = sentenceCount ? Math.min(sentenceIndex + 1, sentenceCount) : 1;
 
         function stopAudio() {
             playbackTokenRef.current += 1;
@@ -728,16 +735,28 @@
             speakNextSegment();
         }
 
+        function playSentenceAt(index) {
+            const safeIndex = target.sentences.length
+                ? Math.max(0, Math.min(index, target.sentences.length - 1))
+                : 0;
+            setSentenceIndex(safeIndex);
+            playAudio(target.sentences[safeIndex] || target.text);
+        }
+
+        function playFirstSentence() {
+            playSentenceAt(0);
+        }
+
+        function playPreviousSentence() {
+            playSentenceAt(sentenceIndex - 1);
+        }
+
         function playCurrentSentence() {
-            playAudio(activeSentence);
+            playSentenceAt(sentenceIndex);
         }
 
         function playNextSentence() {
-            const nextIndex = target.sentences.length
-                ? Math.min(sentenceIndex + 1, target.sentences.length - 1)
-                : 0;
-            setSentenceIndex(nextIndex);
-            playAudio(target.sentences[nextIndex] || target.text);
+            playSentenceAt(sentenceIndex + 1);
         }
 
         function checkDictation() {
@@ -806,25 +825,80 @@
                 status === "loading" ? "読み込み中" : status === "playing" ? "停止" : label
             ),
             h(
-                "button",
-                {
-                    type: "button",
-                    className: "audio-play-button secondary-audio-button",
-                    onClick: playCurrentSentence
-                },
-                "一文"
-            ),
-            target.sentences.length > 1
-                ? h(
+                "div",
+                { className: "audio-sequence-controls" },
+                hasMultipleSentences
+                    ? h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "audio-play-button secondary-audio-button",
+                            onClick: playFirstSentence
+                        },
+                        "最初"
+                    )
+                    : null,
+                hasMultipleSentences
+                    ? h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "audio-play-button secondary-audio-button",
+                            onClick: playPreviousSentence,
+                            disabled: sentenceIndex <= 0
+                        },
+                        "前へ"
+                    )
+                    : null,
+                h(
                     "button",
                     {
                         type: "button",
                         className: "audio-play-button secondary-audio-button",
-                        onClick: playNextSentence
+                        onClick: playCurrentSentence
                     },
-                    "次へ"
-                )
-                : null,
+                    "一文"
+                ),
+                hasMultipleSentences
+                    ? h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "audio-play-button secondary-audio-button",
+                            onClick: playNextSentence,
+                            disabled: sentenceIndex >= sentenceCount - 1
+                        },
+                        "次へ"
+                    )
+                    : null,
+                hasMultipleSentences
+                    ? h(
+                        "select",
+                        {
+                            className: "audio-sentence-select",
+                            value: String(sentenceIndex),
+                            onChange: function (event) {
+                                playSentenceAt(Number(event.target.value));
+                            },
+                            "aria-label": "聞く文を選ぶ"
+                        },
+                        target.sentences.map(function (sentence, index) {
+                            return h(
+                                "option",
+                                { key: `${index}-${sentence.slice(0, 12)}`, value: String(index) },
+                                `${index + 1}文目`
+                            );
+                        })
+                    )
+                    : null,
+                hasMultipleSentences
+                    ? h(
+                        "span",
+                        { className: "audio-position-label" },
+                        `${currentSentenceNumber}/${sentenceCount}`
+                    )
+                    : null
+            ),
             h(
                 "select",
                 {
