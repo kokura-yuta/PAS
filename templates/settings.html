@@ -43,6 +43,23 @@
             <button type="submit">設定を保存</button>
         </form>
 
+        <hr>
+        <h2>データとプライバシー</h2>
+        <p>保存されている自分のデータをJSON形式で取得できます。</p>
+        <p><a href="/account/export">自分のデータを書き出す</a></p>
+        <p><a href="/privacy">プライバシーと利用上の注意</a></p>
+
+        <hr>
+        <h2>アカウントを削除</h2>
+        <p>チャット、記憶、教材など、アカウントに紐づくデータをすべて削除します。この操作は元に戻せません。</p>
+        {% if account_error|default('') %}<p class="error">{{ account_error }}</p>{% endif %}
+        <form method="post" action="/account/delete" onsubmit="return confirm('アカウントと保存データを完全に削除しますか？')">
+            <label for="delete-password">確認のためパスワードを入力</label><br>
+            <input id="delete-password" type="password" name="password" autocomplete="current-password" required>
+            <br><br>
+            <button type="submit">アカウントを完全に削除</button>
+        </form>
+
         <a class="back-link" href="/">ホームへ戻る</a>
     </main>
 </body>

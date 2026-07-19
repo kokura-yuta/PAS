@@ -92,11 +92,39 @@ uvicorn main:app --reload
 `.env` またはRenderのEnvironment Variablesに以下を設定します。
 
 ```text
+ENVIRONMENT=production
 OPENAI_API_KEY=your_openai_api_key
 DATABASE_URL=your_postgresql_url
-SESSION_SECRET_KEY=your_session_secret_key
+SESSION_SECRET_KEY=32文字以上のランダムな秘密値
+APP_BASE_URL=https://your-domain.example
 APP_TIMEZONE=Asia/Tokyo
+SMTP_HOST=your_smtp_host
+SMTP_PORT=587
+SMTP_FROM_EMAIL=no-reply@your-domain.example
+AI_DAILY_REQUEST_LIMIT=100
 ```
+
+本番環境では必須設定が不足していると起動を停止します。Renderでは`RENDER`環境変数を検出して自動的に本番モードになります。
+
+## テスト
+
+既存の仮想環境を使う場合:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
+
+テストは一時SQLiteデータベースを使用し、実運用のデータベースには接続しません。認証、ユーザー間のデータ分離、レート制限、画像判定、セキュリティヘッダー、ヘルスチェックを確認します。
+
+## 運用確認
+
+- RenderのHealth Check Pathを`/health`に設定
+- PostgreSQLの自動バックアップを有効化し、定期的に復元テストを実施
+- ログの`request_id`を使って障害リクエストを追跡
+- OpenAI側で月間利用上限と使用量通知を設定
+- アプリ側の`AI_DAILY_REQUEST_LIMIT`を利用規模と予算に合わせて設定
+- SMTP送信失敗をRenderログまたは外部監視で通知
+- デプロイ前に自動テストを実行
 
 ## Render設定
 

@@ -13,8 +13,13 @@ import secrets
 import base64
 import re
 import smtplib
+import logging
+import threading
+import time
+import uuid
+from collections import defaultdict, deque
 from email.message import EmailMessage
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import Column, Integer, String, Text, DateTime, Boolean, Float, or_
@@ -25,11 +30,51 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 load_dotenv()
 
+ENVIRONMENT = (
+    os.getenv("ENVIRONMENT")
+    or ("production" if os.getenv("RENDER") else "development")
+).strip().lower()
+IS_PRODUCTION = ENVIRONMENT in {"production", "prod"}
+
+
+def require_production_settings():
+    if not IS_PRODUCTION:
+        return
+
+    missing = []
+    if not os.getenv("DATABASE_URL"):
+        missing.append("DATABASE_URL")
+    if not os.getenv("OPENAI_API_KEY"):
+        missing.append("OPENAI_API_KEY")
+    if not os.getenv("SMTP_HOST"):
+        missing.append("SMTP_HOST")
+    if not os.getenv("SMTP_FROM_EMAIL"):
+        missing.append("SMTP_FROM_EMAIL")
+
+    session_secret = os.getenv("SESSION_SECRET_KEY", "")
+    if len(session_secret) < 32:
+        missing.append("SESSION_SECRET_KEY (32文字以上)")
+
+    if missing:
+        raise RuntimeError("本番環境の必須設定が不足しています: " + ", ".join(missing))
+
+
+require_production_settings()
+
+logging.basicConfig(
+    level=os.getenv("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s"
+)
+logger = logging.getLogger("study_pas")
+
 CHAT_HISTORY_LIMIT = 10
 CHAT_DISPLAY_LIMIT = 50
 MEMORY_EXTRACTION_MIN_LENGTH = 20
 THREAD_TITLE_MAX_LENGTH = 50
 PASSWORD_MIN_LENGTH = 8
+PASSWORD_HASH_ITERATIONS = 600000
+CHAT_MESSAGE_MAX_LENGTH = 12000
+AI_DAILY_REQUEST_LIMIT = max(1, int(os.getenv("AI_DAILY_REQUEST_LIMIT", "100")))
 APP_TIMEZONE = os.getenv("APP_TIMEZONE", "Asia/Tokyo")
 DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
@@ -369,7 +414,12 @@ def get_specialist_thread_title(thread_type):
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "dev-session-secret-change-me")
-engine = create_engine(DATABASE_URL)
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"connect_timeout": 10} if DATABASE_URL.startswith("postgresql") else {}
+)
 
 Base = declarative_base()
 
@@ -833,23 +883,31 @@ def hash_password(password):
         "sha256",
         password.encode("utf-8"),
         salt.encode("utf-8"),
-        120000
+        PASSWORD_HASH_ITERATIONS
     ).hex()
 
-    return f"{salt}${password_hash}"
+    return f"pbkdf2_sha256${PASSWORD_HASH_ITERATIONS}${salt}${password_hash}"
 
 
 def verify_password(password, saved_password_hash):
     try:
-        salt, expected_hash = saved_password_hash.split("$", 1)
-    except ValueError:
+        parts = saved_password_hash.split("$")
+        if len(parts) == 2:
+            iterations = 120000
+            salt, expected_hash = parts
+        elif len(parts) == 4 and parts[0] == "pbkdf2_sha256":
+            iterations = int(parts[1])
+            salt, expected_hash = parts[2:]
+        else:
+            return False
+    except (TypeError, ValueError):
         return False
 
     actual_hash = hashlib.pbkdf2_hmac(
         "sha256",
         password.encode("utf-8"),
         salt.encode("utf-8"),
-        120000
+        iterations
     ).hex()
 
     return secrets.compare_digest(actual_hash, expected_hash)
@@ -1236,6 +1294,76 @@ def get_current_user(request):
         return remembered_user
 
     return None
+
+
+def ai_daily_usage(user_id):
+    today_start, today_end = get_today_range()
+    db = SessionLocal()
+    try:
+        return (
+            db.query(ChatMessage)
+            .filter(ChatMessage.user_id == user_id)
+            .filter(ChatMessage.role == "user")
+            .filter(ChatMessage.created_at >= today_start)
+            .filter(ChatMessage.created_at < today_end)
+            .count()
+        )
+    finally:
+        db.close()
+
+
+def ai_quota_error(user_id):
+    if ai_daily_usage(user_id) < AI_DAILY_REQUEST_LIMIT:
+        return None
+    return JSONResponse(
+        {
+            "error": "daily_ai_limit_reached",
+            "message": "本日のAI利用上限に達しました。明日もう一度お試しください。",
+            "limit": AI_DAILY_REQUEST_LIMIT
+        },
+        status_code=429
+    )
+
+
+def serialize_export_value(value):
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value
+
+
+def export_user_data(user):
+    result = {
+        "exported_at": app_now().isoformat(),
+        "account": {
+            "id": user.id,
+            "name": user.name,
+            "email": user.email,
+            "created_at": serialize_export_value(user.created_at)
+        },
+        "data": {}
+    }
+
+    with engine.connect() as connection:
+        for table in Base.metadata.sorted_tables:
+            if table.name == "users" or "user_id" not in table.c:
+                continue
+            rows = connection.execute(
+                table.select().where(table.c.user_id == user.id)
+            ).mappings().all()
+            result["data"][table.name] = [
+                {key: serialize_export_value(value) for key, value in row.items()}
+                for row in rows
+            ]
+    return result
+
+
+def delete_user_account(user_id):
+    with engine.begin() as connection:
+        for table in reversed(Base.metadata.sorted_tables):
+            if table.name == "users" or "user_id" not in table.c:
+                continue
+            connection.execute(table.delete().where(table.c.user_id == user_id))
+        connection.execute(User.__table__.delete().where(User.id == user_id))
 
 
 def login_user(request, user_id):
@@ -5977,7 +6105,9 @@ def load_home_snapshot(user_id):
 
 
 client = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY")
+    api_key=os.getenv("OPENAI_API_KEY"),
+    timeout=45.0,
+    max_retries=2
 )
 
 def extract_memory_from_message(message):
@@ -7539,13 +7669,145 @@ def process_study_image_message(thread, user_id, clean_message, image_bytes, con
     return chat_items
 
 
+def detect_supported_image_type(image_bytes):
+    if image_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if image_bytes.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if image_bytes.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
 app = FastAPI()
 app.add_middleware(
     SessionMiddleware,
     secret_key=SESSION_SECRET_KEY,
     same_site="lax",
+    https_only=IS_PRODUCTION,
     max_age=None
 )
+
+
+class SlidingWindowRateLimiter:
+    def __init__(self):
+        self.events = defaultdict(deque)
+        self.lock = threading.Lock()
+
+    def allow(self, key, limit, window_seconds):
+        now = time.monotonic()
+        cutoff = now - window_seconds
+
+        with self.lock:
+            bucket = self.events[key]
+            while bucket and bucket[0] <= cutoff:
+                bucket.popleft()
+
+            if len(bucket) >= limit:
+                retry_after = max(1, int(window_seconds - (now - bucket[0])))
+                return False, retry_after
+
+            bucket.append(now)
+            return True, 0
+
+
+rate_limiter = SlidingWindowRateLimiter()
+
+
+def request_client_key(request):
+    forwarded_for = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    client_host = request.client.host if request.client else "unknown"
+    return forwarded_for or client_host
+
+
+def is_cross_site_write(request):
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return False
+
+    source = request.headers.get("origin") or request.headers.get("referer")
+    if not source:
+        return False
+
+    source_url = urlparse(source)
+    request_host = request.headers.get("host", "")
+    return bool(source_url.netloc and source_url.netloc != request_host)
+
+
+def rate_limit_policy(request):
+    if request.method != "POST":
+        return None
+
+    path = request.url.path
+    if path in {"/login", "/signup", "/forgot-password", "/reset-password"}:
+        return 10, 15 * 60
+    if path.endswith("/image"):
+        return 12, 60
+    if "/messages" in path or path.endswith("/textbook_preview"):
+        return 30, 60
+    return None
+
+
+@app.middleware("http")
+async def production_safety_middleware(request, call_next):
+    request_id = request.headers.get("x-request-id") or uuid.uuid4().hex[:16]
+    started_at = time.monotonic()
+
+    try:
+        if is_cross_site_write(request):
+            response = JSONResponse({"error": "cross_site_request_rejected"}, status_code=403)
+            policy = None
+        else:
+            policy = rate_limit_policy(request)
+        if policy:
+            limit, window_seconds = policy
+            key = f"{request_client_key(request)}:{request.url.path}"
+            allowed, retry_after = rate_limiter.allow(key, limit, window_seconds)
+            if not allowed:
+                response = JSONResponse(
+                    {"error": "rate_limit_exceeded", "message": "しばらく待ってからもう一度お試しください。"},
+                    status_code=429
+                )
+                response.headers["Retry-After"] = str(retry_after)
+            else:
+                response = await call_next(request)
+        elif not is_cross_site_write(request):
+            response = await call_next(request)
+    except Exception:
+        logger.exception(
+            "request_failed request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.url.path
+        )
+        response = JSONResponse(
+            {"error": "internal_error", "message": "処理に失敗しました。時間をおいてもう一度お試しください。"},
+            status_code=500
+        )
+
+    elapsed_ms = round((time.monotonic() - started_at) * 1000, 1)
+    response.headers["X-Request-ID"] = request_id
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; script-src 'self' 'unsafe-inline' https://unpkg.com; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; "
+        "connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    )
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+    logger.info(
+        "request_complete request_id=%s method=%s path=%s status=%s duration_ms=%s",
+        request_id,
+        request.method,
+        request.url.path,
+        response.status_code,
+        elapsed_ms
+    )
+    return response
 
 app.mount(
     "/static",
@@ -7554,6 +7816,17 @@ app.mount(
 )
 
 templates = Jinja2Templates(directory="templates")
+
+
+@app.get("/health")
+def health_check():
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+        return {"status": "ok", "database": "ok"}
+    except Exception:
+        logger.exception("health_check_failed")
+        return JSONResponse({"status": "unavailable", "database": "error"}, status_code=503)
 
 
 def render_react_app(request, current_user):
@@ -7691,7 +7964,7 @@ def forgot_password_action(request: Request, email: str = Form("")):
 
     message = "入力されたメールアドレスに再設定リンクを送信しました。"
 
-    if token and not email_sent:
+    if token and not email_sent and not IS_PRODUCTION:
         message = "メール送信設定が未設定のため、開発用の再設定リンクを表示しています。"
 
     return templates.TemplateResponse(
@@ -7701,7 +7974,7 @@ def forgot_password_action(request: Request, email: str = Form("")):
             "settings": {"theme_name": "calm"},
             "error": "",
             "message": message,
-            "reset_url": reset_url if token and not email_sent else "",
+            "reset_url": reset_url if token and not email_sent and not IS_PRODUCTION else "",
             "email": clean_email
         }
     )
@@ -7893,6 +8166,10 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
+    quota_error = ai_quota_error(current_user.id)
+    if quota_error:
+        return quota_error
+
     thread = load_chat_thread(thread_id, current_user.id)
 
     if thread is None:
@@ -7905,6 +8182,9 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
 
     if not clean_message:
         return JSONResponse({"error": "message_required"}, status_code=400)
+
+    if len(clean_message) > CHAT_MESSAGE_MAX_LENGTH:
+        return JSONResponse({"error": "message_too_long"}, status_code=400)
 
     chat_items = process_chat_message(thread, current_user.id, clean_message)
     thread = load_chat_thread(thread.id, current_user.id) or thread
@@ -7922,6 +8202,10 @@ def api_chat_message_stream(request: Request, thread_id: int, payload: ChatMessa
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
+    quota_error = ai_quota_error(current_user.id)
+    if quota_error:
+        return quota_error
+
     thread = load_chat_thread(thread_id, current_user.id)
 
     if thread is None:
@@ -7934,6 +8218,9 @@ def api_chat_message_stream(request: Request, thread_id: int, payload: ChatMessa
 
     if not clean_message:
         return JSONResponse({"error": "message_required"}, status_code=400)
+
+    if len(clean_message) > CHAT_MESSAGE_MAX_LENGTH:
+        return JSONResponse({"error": "message_too_long"}, status_code=400)
 
     return StreamingResponse(
         stream_chat_message_events(thread, current_user.id, clean_message),
@@ -7952,6 +8239,10 @@ async def api_chat_image_upload(
 
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
+
+    quota_error = ai_quota_error(current_user.id)
+    if quota_error:
+        return quota_error
 
     thread = load_chat_thread(thread_id, current_user.id)
 
@@ -7973,6 +8264,12 @@ async def api_chat_image_upload(
 
     if len(image_bytes) > STUDY_IMAGE_MAX_BYTES:
         return JSONResponse({"error": "image_too_large"}, status_code=400)
+
+    detected_content_type = detect_supported_image_type(image_bytes)
+    if detected_content_type is None:
+        return JSONResponse({"error": "unsupported_image"}, status_code=400)
+
+    content_type = detected_content_type
 
     clean_message = message.strip()
     chat_items = process_study_image_message(thread, current_user.id, clean_message, image_bytes, content_type)
@@ -8553,6 +8850,48 @@ def settings_save(
     )
 
     return RedirectResponse(url="/settings", status_code=303)
+
+
+@app.get("/account/export")
+def account_export(request: Request):
+    current_user = get_current_user(request)
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    response = JSONResponse(export_user_data(current_user))
+    response.headers["Content-Disposition"] = 'attachment; filename="study-pas-data.json"'
+    return response
+
+
+@app.post("/account/delete")
+def account_delete(request: Request, password: str = Form("")):
+    current_user = get_current_user(request)
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    if not verify_password(password, current_user.password_hash):
+        settings = load_settings(current_user.id)
+        return templates.TemplateResponse(
+            request=request,
+            name="settings.html",
+            context={"settings": settings, "account_error": "パスワードが正しくありません。"},
+            status_code=400
+        )
+
+    request.session.clear()
+    delete_user_account(current_user.id)
+    response = RedirectResponse(url="/signup?account_deleted=1", status_code=303)
+    clear_remember_login_cookie(response)
+    return response
+
+
+@app.get("/privacy")
+def privacy_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="privacy.html",
+        context={"settings": {"theme_name": "calm"}}
+    )
 
 @app.post("/chat/{thread_id}")
 def chat_send(request: Request, thread_id: int, message: str = Form(...)):

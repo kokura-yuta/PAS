@@ -1290,6 +1290,7 @@
                             "ロードマップ"
                         ),
                         h("a", { href: "/memories" }, "Memory"),
+                        h("a", { href: "/settings" }, "設定・データ管理"),
                         h(
                             "form",
                             { method: "post", action: "/logout" },
