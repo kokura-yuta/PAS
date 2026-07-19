@@ -1014,44 +1014,6 @@
         );
     }
 
-    function SelectionAudioPanel(props) {
-        const text = String(props.text || "").trim();
-
-        if (!text) {
-            return null;
-        }
-
-        return h(
-            "aside",
-            { className: "selection-audio-panel", "aria-live": "polite" },
-            h(
-                "div",
-                { className: "selection-audio-preview" },
-                h("span", null, "選択した文章"),
-                h("p", null, text.length > 120 ? `${text.slice(0, 120)}...` : text)
-            ),
-            h(
-                "div",
-                { className: "selection-audio-actions" },
-                h(LanguageAudioTools, {
-                    text: text,
-                    contextLabel: "選択した言語テキスト",
-                    label: "選択部分を聞く",
-                    sourceType: "selection"
-                }),
-                h(
-                    "button",
-                    {
-                        type: "button",
-                        className: "selection-audio-close",
-                        onClick: props.onClear
-                    },
-                    "閉じる"
-                )
-            )
-        );
-    }
-
     function App() {
         const [route, setRoute] = useState(window.location.pathname);
         const [screenState, setScreenState] = useState("entered");
@@ -2490,7 +2452,6 @@
         const [textbookPreview, setTextbookPreview] = useState(null);
         const [previewingTextbook, setPreviewingTextbook] = useState(false);
         const [savingTextbook, setSavingTextbook] = useState(false);
-        const [selectedAudioText, setSelectedAudioText] = useState("");
         const fileInputRef = useRef(null);
         const abortControllerRef = useRef(null);
         const streamingAssistantRef = useRef("");
@@ -2506,7 +2467,6 @@
             setError("");
             setFile(null);
             setTextbookPreview(null);
-            setSelectedAudioText("");
 
             api(apiPath)
                 .then(function (data) {
@@ -2719,21 +2679,6 @@
 
         function sendLessonAction(action) {
             postTextMessage(action.message, action.label);
-        }
-
-        function captureSelectedAudioText() {
-            const selection = window.getSelection ? window.getSelection() : null;
-            const selectedText = selection ? selection.toString().trim() : "";
-
-            if (selectedText.length < 2) {
-                return;
-            }
-
-            setSelectedAudioText(selectedText.slice(0, 1000));
-        }
-
-        function captureSelectedAudioTextSoon() {
-            window.setTimeout(captureSelectedAudioText, 90);
         }
 
         function handleMessageKeyDown(event) {
@@ -3000,11 +2945,7 @@
             error ? h("p", { className: "notice" }, error) : null,
             h(
                 "section",
-                {
-                    className: "study-chat-log",
-                    onMouseUp: captureSelectedAudioText,
-                    onTouchEnd: captureSelectedAudioTextSoon
-                },
+                { className: "study-chat-log" },
                 !chatData
                     ? h("div", { className: "study-message teacher-message" }, h("p", null, "読み込み中"))
                     : messages.length
@@ -3039,14 +2980,6 @@
                     ? h(ThinkingBubble, { label: sendingLabel })
                     : null
             ),
-            selectedAudioText
-                ? h(SelectionAudioPanel, {
-                    text: selectedAudioText,
-                    onClear: function () {
-                        setSelectedAudioText("");
-                    }
-                })
-                : null,
             textbookPreview
                 ? h(
                     "section",
