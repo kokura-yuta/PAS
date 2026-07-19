@@ -2456,6 +2456,7 @@
         const abortControllerRef = useRef(null);
         const streamingAssistantRef = useRef("");
         const thinkingTimerRef = useRef(null);
+        const shouldScrollToBottomRef = useRef(false);
 
         const threadIdMatch = route.match(/^\/chat\/(\d+)/);
         const threadId = threadIdMatch ? threadIdMatch[1] : null;
@@ -2471,6 +2472,7 @@
             api(apiPath)
                 .then(function (data) {
                     if (active) {
+                        shouldScrollToBottomRef.current = true;
                         setChatData(data);
                     }
                 })
@@ -2491,12 +2493,18 @@
         }, [apiPath]);
 
         useEffect(function () {
+            if (!chatData || !shouldScrollToBottomRef.current) {
+                return;
+            }
+
+            shouldScrollToBottomRef.current = false;
             window.requestAnimationFrame(function () {
                 window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
             });
         }, [chatData, sending]);
 
         function updateStreamingAssistant(tempId, content) {
+            shouldScrollToBottomRef.current = true;
             setChatData(function (current) {
                 if (!current) {
                     return current;
@@ -2542,6 +2550,7 @@
                 const data = await api(`/api/chat/${chatData.thread.id}`);
 
                 if (data) {
+                    shouldScrollToBottomRef.current = true;
                     setChatData(data);
                 }
             } catch (err) {
@@ -2561,6 +2570,7 @@
             setSending(true);
             startThinkingLabels(THINKING_LABELS);
             setError("");
+            shouldScrollToBottomRef.current = true;
             setChatData({
                 ...chatData,
                 messages: chatData.messages.concat([
@@ -2629,6 +2639,7 @@
             setError("");
 
             const optimisticContent = file ? `[画像] ${cleanMessage || "この画像を解説して"}` : cleanMessage;
+            shouldScrollToBottomRef.current = true;
             setChatData({
                 ...chatData,
                 messages: chatData.messages.concat([
@@ -2658,6 +2669,7 @@
                 }
 
                 if (data) {
+                    shouldScrollToBottomRef.current = true;
                     setChatData(data);
                 }
 
@@ -2679,6 +2691,13 @@
 
         function sendLessonAction(action) {
             postTextMessage(action.message, action.label);
+        }
+
+        function sendContinueFromPlan() {
+            postTextMessage(
+                "現在の授業状態、ロードマップ、教科書、理解度を見て、この続きから始めてください。最初に短い具体例を1つ説明してから、今のレベルに合う確認を1問だけ出してください。",
+                "この続きから"
+            );
         }
 
         function handleMessageKeyDown(event) {
@@ -2827,6 +2846,10 @@
                 message: "今の内容を使った小さな応用問題を1問だけ出してください。"
             },
             {
+                label: "レベルを上げる",
+                message: "今の内容は理解できているので、同じ型の基礎問題ではなく、一段上の実践問題に進めてください。"
+            },
+            {
                 label: "今日のまとめ",
                 message: "今日学んだ内容を短くまとめて、次に復習するポイントを教えてください。"
             },
@@ -2916,8 +2939,35 @@
                                 h("strong", null, (context.due_review_items || []).join(" / ") || `${context.due_review_count}件`)
                             )
                             : null
-                    )
-                    ,
+                    ),
+                    h(
+                        "section",
+                        { className: "study-teacher-plan" },
+                        h(
+                            "div",
+                            { className: "study-teacher-plan-main" },
+                            h("span", null, "次の授業"),
+                            h("strong", null, context.teacher_next_move || context.next_suggestion || "この続きから始められます。"),
+                            h("p", null, context.lesson_last_signal || "先生がロードマップ・教科書・理解度を見て進め方を決めます。")
+                        ),
+                        h(
+                            "div",
+                            { className: "study-teacher-plan-meta" },
+                            h("span", null, `理解感 ${context.lesson_live_understanding || 35}%`),
+                            h("span", null, context.lesson_question_level_label || "用語確認"),
+                            context.lesson_current_focus ? h("span", null, context.lesson_current_focus) : null,
+                            context.lesson_recent_problem_count ? h("span", null, `直近問題 ${context.lesson_recent_problem_count}件`) : null
+                        ),
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: sendContinueFromPlan,
+                                disabled: sending || !chatData
+                            },
+                            "この続きから"
+                        )
+                    ),
                     context.should_suggest_textbook
                         ? h(
                             "section",

@@ -1381,6 +1381,36 @@ def serialize_study_context(thread):
     }
 
 
+def build_teacher_next_move(lesson_state, current_item, next_item, latest_textbook, weak_note):
+    if lesson_state:
+        lesson_level = normalize_lesson_level(lesson_state.question_level)
+        live_understanding = clamp_percent(lesson_state.live_understanding, 35)
+        current_focus = lesson_state.current_focus or ""
+    else:
+        lesson_level = "term"
+        live_understanding = 35
+        current_focus = ""
+
+    level_label = LESSON_LEVEL_LABELS.get(lesson_level, "用語確認")
+
+    if weak_note and live_understanding < 60:
+        return "まずつまずきを短い具体例でほどいてから、確認を1問だけ出します。"
+
+    if live_understanding >= 72 and next_item:
+        return f"理解が進んでいるので、次は「{next_item.title}」へ進み、{level_label}で確認します。"
+
+    if current_item:
+        return f"今日は「{current_item.title}」を1回具体的に説明してから、{level_label}を1問出します。"
+
+    if current_focus:
+        return f"今の焦点は「{current_focus}」です。説明を短く整理してから次へ進みます。"
+
+    if latest_textbook:
+        return f"教科書「{latest_textbook.title}」を使って、前回の続きから始めます。"
+
+    return "まず学びたい内容を確認して、今日の小さな到達点を一緒に決めます。"
+
+
 def collect_study_learning_snapshot(db, thread):
     subject = normalize_subject_title(thread.title) or "学習相談"
 
@@ -1488,6 +1518,20 @@ def collect_study_learning_snapshot(db, thread):
         .first()
     )
     latest_textbook = textbooks[0] if textbooks else None
+    lesson_level = normalize_lesson_level(lesson_state.question_level if lesson_state else "term")
+    lesson_understanding = clamp_percent(lesson_state.live_understanding if lesson_state else 35, 35)
+    lesson_recent_problem_count = (
+        len(parse_recent_problem_history(lesson_state.recent_problem_history))
+        if lesson_state
+        else 0
+    )
+    teacher_next_move = build_teacher_next_move(
+        lesson_state,
+        current_item,
+        next_item,
+        latest_textbook,
+        weak_note
+    )
 
     if roadmap_items:
         roadmap_status_line = (
@@ -1521,6 +1565,13 @@ def collect_study_learning_snapshot(db, thread):
         "understanding_percent": subject_understanding.percent if subject_understanding else 0,
         "weak_note": truncate_text(weak_note, 120),
         "next_suggestion": next_suggestion,
+        "teacher_next_move": teacher_next_move,
+        "lesson_live_understanding": lesson_understanding,
+        "lesson_question_level": lesson_level,
+        "lesson_question_level_label": LESSON_LEVEL_LABELS.get(lesson_level, "用語確認"),
+        "lesson_current_focus": truncate_text(lesson_state.current_focus, 90) if lesson_state else "",
+        "lesson_last_signal": truncate_text(lesson_state.last_signal, 140) if lesson_state else "",
+        "lesson_recent_problem_count": lesson_recent_problem_count,
         "due_review_count": len(due_reviews),
         "due_review_items": [
             truncate_text(item.item_name or item.scope_type or "復習", 60)
@@ -6772,11 +6823,14 @@ Study PASの基本方針:
 - ロードマップがある時は、現在地・次のおすすめ・飛ばした単元を踏まえて授業してください。
 - 基本の授業の流れは、説明 → 理解確認 → 必要なら小さな応用問題 → 添削 → 今日のまとめ、です。
 - ただし毎回すべてを詰め込まず、ユーザーの発言に合う段階だけを行ってください。
+- 毎回の授業では、先生側で「今扱う1テーマ」「到達点」「次へ進む条件」を決めてから返答してください。
+- 1回の返答で新しい概念を複数広げすぎず、基本は1テーマだけ具体的に扱ってください。
 - 1回の授業返答は「現在地の一言 → 今回の具体説明 → 確認1問または次の一歩」を基本形にしてください。
 - 説明が必要な時は、結論、たとえ、短い例、理解確認の順にしてください。
 - 質問だけで始めず、まず先生として具体例・コード・図解のどれかを使って1回説明してから質問してください。
 - 同じ内容を長くたらたら続けず、理解できた反応があれば「ここはOK」と短く締めて次の内容へ進んでください。
 - ユーザーが答えた時は、まず正誤をやさしく伝え、どこが良いか・どこを直すかを短く添削してください。
+- 正解または十分理解できている回答なら、同じ確認を続けず、次の単元・次の問題形式・少し上の難易度のどれかへ進んでください。
 - 理解確認や問題を出す時は、一度に1問だけにしてください。
 - 「理解確認」と言われたら、今の内容から1問だけ出し、答えやすい形にしてください。
 - 「応用問題」と言われたら、少しだけ難しい1問を出し、必要ならヒントを1つ添えてください。
