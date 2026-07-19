@@ -2031,8 +2031,8 @@ body:has(.study-app) {
 
 .textbook-reader .textbook-section-audio {
     display: grid;
-    gap: 8px;
-    padding-bottom: 12px;
+    gap: 6px;
+    padding-bottom: 6px;
 }
 
 .textbook-section-audio .textbook-chapter-heading {
@@ -2083,7 +2083,39 @@ body:has(.study-app) {
 }
 
 .textbook-section-audio .language-audio-textbook {
-    margin-top: 2px;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    width: min(100%, 360px);
+    margin-top: 0;
+    padding: 0;
+    overflow: visible;
+}
+
+.textbook-section-audio .language-audio-textbook > * {
+    min-width: 0;
+}
+
+.textbook-section-audio .audio-play-button,
+.textbook-section-audio .audio-rate-select,
+.textbook-section-audio .audio-sentence-select,
+.textbook-section-audio .language-audio-label,
+.textbook-section-audio .audio-position-label {
+    width: 100%;
+    justify-content: center;
+}
+
+.textbook-section-audio .audio-sequence-controls {
+    display: grid;
+    grid-column: 1 / -1;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+    width: 100%;
+}
+
+.textbook-section-audio .language-audio-label,
+.textbook-section-audio .audio-position-label {
+    min-height: 32px;
 }
 
 .textbook-code-block,
