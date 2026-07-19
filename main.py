@@ -6180,6 +6180,39 @@ def calculate_lesson_end_score(note_data, user_message, teacher_message):
     return max(35, min(86, score))
 
 
+def calculate_study_turn_score(note_data, user_message, teacher_message):
+    score = 52
+    weak_note = (note_data.get("weak_note") or "").strip()
+    progress_signal = note_data.get("progress_signal") or "stay"
+
+    if (note_data.get("lesson_report") or "").strip():
+        score += 6
+
+    if should_advance_roadmap_from_message(user_message):
+        score += 10
+
+    if contains_any_word(user_message, LESSON_LEVEL_UP_WORDS):
+        score += 10
+
+    if note_data.get("ready_for_next"):
+        score += 8
+
+    if progress_signal == "level_up":
+        score += 8
+    elif progress_signal == "advance":
+        score += 6
+    elif progress_signal == "slow_down":
+        score -= 10
+
+    if weak_note:
+        score -= 10
+
+    if contains_any_word(f"{user_message}\n{teacher_message}", STUDY_WEAK_NOTE_WORDS):
+        score -= 6
+
+    return max(25, min(84, score))
+
+
 def update_roadmap_after_lesson_end(db, roadmap_items, note_data, user_message):
     current_item = choose_roadmap_focus_item(roadmap_items)
 
@@ -6411,6 +6444,129 @@ def finalize_study_lesson_end(thread, user_id, user_message, teacher_message, hi
         )
 
 
+def sync_study_turn_progress(thread, user_id, user_message, teacher_message, note_data):
+    if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
+        return
+
+    if is_study_lesson_end_message(user_message):
+        return
+
+    note_data = note_data or {}
+    weak_note = (note_data.get("weak_note") or "").strip()
+    lesson_report = (note_data.get("lesson_report") or "").strip()
+    next_step = (note_data.get("next_step") or "").strip()
+    teaching_adjustment = (note_data.get("teaching_adjustment") or "").strip()
+    progress_signal = note_data.get("progress_signal") or "stay"
+    should_sync = any([
+        weak_note,
+        lesson_report,
+        next_step,
+        teaching_adjustment,
+        note_data.get("ready_for_next"),
+        progress_signal in ["advance", "level_up", "slow_down"],
+        should_record_study_progress_message(user_message)
+    ])
+
+    if not should_sync:
+        return
+
+    subject = normalize_subject_title(thread.title) or thread.title
+    score = calculate_study_turn_score(note_data, user_message, teacher_message)
+    evidence_source = lesson_report or weak_note or next_step or teaching_adjustment or teacher_message
+    evidence = truncate_text(evidence_source, 360)
+    db = SessionLocal()
+
+    try:
+        lesson_state = load_or_create_lesson_state(db, user_id, thread.id, subject)
+
+        if lesson_report:
+            lesson_state.mastered_points = append_lesson_note(
+                lesson_state.mastered_points,
+                f"授業中の進捗: {lesson_report}"
+            )
+
+        if weak_note:
+            lesson_state.weak_points = append_lesson_note(
+                lesson_state.weak_points,
+                f"授業中のつまずき: {weak_note}"
+            )
+
+        if next_step:
+            lesson_state.current_focus = next_step
+
+        if teaching_adjustment:
+            lesson_state.last_signal = f"教え方調整: {teaching_adjustment}"
+
+        if weak_note or progress_signal == "slow_down":
+            lesson_state.live_understanding = max(
+                10,
+                min(normalize_percent(lesson_state.live_understanding), score)
+            )
+            lesson_state.question_level = move_lesson_level(lesson_state.question_level, -1)
+            lesson_state.last_signal = f"授業中の判断: ここは急がず確認します。{weak_note or '理解が少し不安定です。'}"
+        elif note_data.get("ready_for_next") or progress_signal in ["advance", "level_up"] or should_record_study_progress_message(user_message):
+            lesson_state.live_understanding = max(
+                normalize_percent(lesson_state.live_understanding),
+                min(score, 86)
+            )
+            step = 2 if progress_signal == "level_up" or contains_any_word(user_message, LESSON_LEVEL_UP_WORDS) else 1
+            lesson_state.question_level = move_lesson_level(lesson_state.question_level, step)
+            lesson_state.last_signal = "授業中の判断: 理解が進んでいるため、次の内容や少し実践的な問題へ進めます。"
+
+        if not lesson_state.last_signal:
+            lesson_state.last_signal = "授業中の学習状態を更新しました。"
+
+        lesson_state.updated_at = app_now()
+
+        subject_understanding = get_or_create_understanding(
+            db=db,
+            user_id=user_id,
+            subject=subject,
+            textbook_id=None,
+            scope_type="subject",
+            item_name=subject
+        )
+        update_understanding(
+            db=db,
+            understanding=subject_understanding,
+            ai_score=score,
+            assessment_count=0,
+            evidence=f"授業中の軽い同期: {evidence}",
+            review_context={
+                "answer_type": "lesson_progress",
+                "used_hint": False,
+                "weak_points": weak_note,
+                "unclear_points": weak_note
+            }
+        )
+
+        db.commit()
+    finally:
+        db.close()
+
+    proposal_source = lesson_report or weak_note or next_step
+
+    if proposal_source:
+        save_or_update_memory(
+            content=f"{subject}の授業中メモ: {truncate_text(proposal_source, 180)}",
+            category="lesson_progress",
+            importance=4,
+            confidence=0.78,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+        save_or_update_memory(
+            content=f"{subject}の教科書に追加候補: {truncate_text(proposal_source, 160)}",
+            category="textbook_proposal",
+            importance=4,
+            confidence=0.76,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+
 def save_study_learning_notes(thread, user_id, user_message, teacher_message, history):
     if thread is None or thread.thread_type != STUDY_THREAD_TYPE:
         return
@@ -6478,6 +6634,13 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
         user_message=user_message,
         teacher_message=teacher_message,
         history=history,
+        note_data=note_data
+    )
+    sync_study_turn_progress(
+        thread=thread,
+        user_id=user_id,
+        user_message=user_message,
+        teacher_message=teacher_message,
         note_data=note_data
     )
 
