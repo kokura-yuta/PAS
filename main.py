@@ -172,6 +172,19 @@ LESSON_LEVEL_UP_WORDS = [
     "もう少し上",
     "発展問題"
 ]
+LESSON_PROCEED_WORDS = [
+    "次いこ",
+    "次行こ",
+    "次に進",
+    "次へ進",
+    "先に進",
+    "次の単元",
+    "もう次",
+    "進めて",
+    "進もう",
+    "続きやろ",
+    "続きやろう"
+]
 STUDY_IMAGE_MAX_BYTES = 7 * 1024 * 1024
 STUDY_MEMORY_CATEGORIES = {
     "understanding",
@@ -1553,6 +1566,20 @@ def is_study_lesson_end_message(message):
     return contains_any_word(message, STUDY_LESSON_END_WORDS)
 
 
+def should_advance_roadmap_from_message(message):
+    return (
+        contains_any_word(message, LESSON_UNDERSTOOD_WORDS)
+        or contains_any_word(message, LESSON_PROCEED_WORDS)
+    )
+
+
+def should_record_study_progress_message(message):
+    return (
+        should_advance_roadmap_from_message(message)
+        or contains_any_word(message, LESSON_LEVEL_UP_WORDS)
+    )
+
+
 def is_study_summary_action(message):
     return "理解確認" in (message or "") or "応用問題" in (message or "")
 
@@ -2484,7 +2511,7 @@ def add_roadmap_item_from_message(db, roadmap_items, message):
 
 
 def advance_roadmap_when_understood(db, roadmap_items, message):
-    if not contains_any_word(message, LESSON_UNDERSTOOD_WORDS):
+    if not should_advance_roadmap_from_message(message):
         return None
 
     item = choose_roadmap_focus_item(roadmap_items)
@@ -2493,7 +2520,7 @@ def advance_roadmap_when_understood(db, roadmap_items, message):
         return None
 
     item.status = "learned"
-    item.reason = "授業中に理解できた反応があったため、完了として記録しました。"
+    item.reason = "授業中に理解できた反応、または次へ進む意思があったため、完了として記録しました。"
     item.updated_at = app_now()
 
     next_item = next(
@@ -2565,7 +2592,7 @@ def apply_roadmap_message_intent(db, roadmap_items, message):
                 "item_title": item.title
             }
 
-    elif contains_any_word(message, LESSON_UNDERSTOOD_WORDS):
+    elif should_advance_roadmap_from_message(message):
         progress = advance_roadmap_when_understood(db, roadmap_items, message)
 
         if progress is not None:
@@ -3545,7 +3572,15 @@ def apply_lesson_message_signal(db, state, message):
             "\n".join(filter(None, [state.mastered_points, f"理解できた反応: {message}"])),
             900
         )
-        signal = "授業中の理解判断: 理解できた反応があるため、次の難易度へ進める"
+        signal = "授業中の理解判断: 理解できた反応があるため、同じ説明は1文だけにして次の内容へ進める"
+    elif contains_any_word(message, LESSON_PROCEED_WORDS):
+        understanding = min(86, understanding + 10)
+        level = move_lesson_level(level, 1)
+        state.mastered_points = truncate_text(
+            "\n".join(filter(None, [state.mastered_points, f"次へ進む希望: {message}"])),
+            900
+        )
+        signal = "授業中の理解判断: ユーザーが次へ進みたいと言っているため、現在の焦点を短く締めて次の単元へ進める"
     elif "応用問題" in message:
         understanding = max(understanding, 58)
         level = move_lesson_level(level, 1)
@@ -3638,8 +3673,11 @@ def format_lesson_state_for_prompt(state):
 授業進行ルール:
 - 上の最近出した問題と同じ問題・似すぎた問題を繰り返さないでください。
 - 復習が必要な場合でも、問題文・状況・出題方法を変えてください。
+- 返答は「現在地の一言 → 具体説明を1回 → 確認1問または次の一歩」の順にしてください。
+- 先に質問だけを投げず、必要な説明は短い具体例やコードを見せてから確認してください。
 - 理解感が高い場合は、用語確認を続けず、記述→コード読解→コード修正→コード作成→ミニアプリ制作へ少しずつ進めてください。
 - ユーザーが「理解した」「レベルを上げて」「もっと難しく」と言っている場合は、直近と同じ型の基礎問題を出さず、現在の問題レベルより1段以上上げてください。
+- ユーザーが「次へ」「進もう」と言っている場合は、今の焦点を1文で締めて、次の単元または次の難易度へ進んでください。
 - 同じ知識を扱う場合でも、用語確認を繰り返さず、説明問題、読解、修正、自作課題のように出題形式を変えてください。
 - 理解感が低い場合は、基礎へ戻し、説明を短く分けてください。
 - 毎回最初から説明し直さず、理解済みの内容は短く確認して次へ進んでください。
@@ -3804,11 +3842,14 @@ def build_study_context_for_prompt(thread, user_id, latest_message=""):
 - ロードマップがある場合は、現在地または次のおすすめから始めてください。
 - 教科書や理解度がある場合は、一般論ではなく「このユーザーの続き」として授業してください。
 - 苦手・つまずきがある場合は、決めつけずに「前にここが少し曖昧だったね」のように自然に使ってください。
+- 質問だけで始めず、まず今回の内容を具体例・コード・図解のどれか1つで説明してから確認してください。
+- 同じ内容を長く繰り返さず、理解できている反応があれば「ここはOK」と短く締めて次へ進めてください。
 - 返答の最後に、次に進むか、理解確認するか、教科書に残すかを1つだけ自然に提案してください。
 
 ロードマップ利用ルール:
 - 返答前に、必ず上のロードマップ・現在地・飛ばした単元・理解度を確認してください。
 - 「ロードマップ通りに進もう」と言われたら、現在地または次の未学習単元から授業を始めてください。
+- 「分かった」「次へ進もう」と言われたら、現在地を完了または復習候補として扱い、次のおすすめへ自然につなげてください。
 - 「ここは飛ばす」と言われたら、その単元を飛ばした前提で進め、必要な前提知識だけ短く補ってください。
 - 順番は強制せず、ユーザーが選んだ単元を尊重してください。
 """
@@ -6039,6 +6080,7 @@ def extract_study_learning_notes(subject, user_message, teacher_message, history
 目的:
 - ユーザーが「わからない」「むずい」「曖昧」と言った時に、何が分からなかったのかを会話項目ごとに残す
 - 「今日はここまで」「今日のまとめ」の時に、次回に引き継げる短い学習レポートを残す
+- ユーザーが「分かった」「次へ進もう」「もっと難しく」と言った時は、同じ説明を繰り返さず次に進めるための進行メモを残す
 - ただし、推測しすぎず、会話から読み取れる範囲だけにする
 
 必ずJSONだけで返してください。
@@ -6049,13 +6091,19 @@ def extract_study_learning_notes(subject, user_message, teacher_message, history
   "weak_note": "Pythonのreturnが何を返す仕組みなのかが曖昧。",
   "should_save_lesson_report": true,
   "lesson_report": "今日はPythonのreturnの意味を確認した。次回はprintとの違いを短いコードで練習する。",
-  "next_step": "returnを使う短い関数を1つ書いて、戻り値を確認する。"
+  "next_step": "returnを使う短い関数を1つ書いて、戻り値を確認する。",
+  "ready_for_next": false,
+  "progress_signal": "stay",
+  "teaching_adjustment": "次回は用語確認を繰り返さず、短いコード読解に進める。"
 }}
 
 保存しない場合は false と空文字にしてください。
 weak_note は、ユーザーが本当に困っている内容がある時だけ true にしてください。
 lesson_report は、lesson_end が true の時、または会話が一区切りになっている時だけ true にしてください。
 next_step は、次回の授業で最初にやる小さな行動を1文にしてください。
+ready_for_next は、ユーザーが理解できた・次へ進みたい・難易度を上げたい意図を示した時だけ true にしてください。
+progress_signal は "stay" / "advance" / "level_up" / "slow_down" のどれかにしてください。
+teaching_adjustment は、次の先生が同じ説明を繰り返さないための教え方メモを1文にしてください。
 
 科目:
 {subject}
@@ -6082,7 +6130,10 @@ lesson_end:
             "weak_note": "",
             "should_save_lesson_report": False,
             "lesson_report": "",
-            "next_step": ""
+            "next_step": "",
+            "ready_for_next": False,
+            "progress_signal": "stay",
+            "teaching_adjustment": ""
         }
 
 
@@ -6111,13 +6162,22 @@ def calculate_lesson_end_score(note_data, user_message, teacher_message):
     if contains_any_word(user_message, LESSON_UNDERSTOOD_WORDS):
         score += 10
 
+    if note_data.get("ready_for_next"):
+        score += 8
+
+    if note_data.get("progress_signal") == "level_up":
+        score += 6
+
+    if note_data.get("progress_signal") == "slow_down":
+        score -= 8
+
     if (note_data.get("weak_note") or "").strip():
         score -= 6
 
     if contains_any_word(f"{user_message}\n{teacher_message}", STUDY_WEAK_NOTE_WORDS):
         score -= 4
 
-    return max(35, min(78, score))
+    return max(35, min(86, score))
 
 
 def update_roadmap_after_lesson_end(db, roadmap_items, note_data, user_message):
@@ -6129,17 +6189,27 @@ def update_roadmap_after_lesson_end(db, roadmap_items, note_data, user_message):
     status = normalize_roadmap_status(current_item.status)
     understood = contains_any_word(user_message, LESSON_UNDERSTOOD_WORDS)
     weak_note = (note_data.get("weak_note") or "").strip()
+    ready_for_next = (
+        bool(note_data.get("ready_for_next"))
+        or contains_any_word(user_message, LESSON_PROCEED_WORDS)
+        or (understood and not weak_note)
+    )
+    progress_signal = note_data.get("progress_signal") or "stay"
 
     if status == "not_started":
         current_item.status = "learning"
         current_item.reason = "授業終了時に今日の学習位置として開始しました。"
-    elif understood and not weak_note:
+    elif ready_for_next and not weak_note:
         current_item.status = "review"
-        current_item.reason = "授業終了時の整理で理解が進んだため、復習候補として記録しました。"
+        current_item.reason = "授業終了時の整理で理解が進み、次へ進める状態として復習候補に記録しました。"
     elif status == "learning":
         current_item.reason = "授業終了時に、次回もここから続ける現在地として記録しました。"
     else:
         current_item.reason = "授業終了時に現在地を確認しました。"
+
+    if progress_signal == "slow_down" and weak_note:
+        current_item.status = "learning"
+        current_item.reason = "授業終了時に曖昧な点が残ったため、次回もここから丁寧に続けます。"
 
     current_item.updated_at = app_now()
 
@@ -6152,6 +6222,11 @@ def update_roadmap_after_lesson_end(db, roadmap_items, note_data, user_message):
         ),
         None
     )
+
+    if ready_for_next and not weak_note and next_item is not None:
+        next_item.status = "learning"
+        next_item.reason = f"「{current_item.title}」の理解が進んだため、次に進みやすい単元として開始しました。"
+        next_item.updated_at = app_now()
 
     return {
         "current": current_item.title,
@@ -6345,6 +6420,7 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
         should_make_study_weak_note(user_message)
         or lesson_end
         or is_study_summary_action(user_message)
+        or should_record_study_progress_message(user_message)
     )
 
     if not should_extract:
@@ -6372,6 +6448,7 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
     weak_note = (note_data.get("weak_note") or "").strip()
     lesson_report = (note_data.get("lesson_report") or "").strip()
     next_step = (note_data.get("next_step") or "").strip()
+    teaching_adjustment = (note_data.get("teaching_adjustment") or "").strip()
 
     if note_data.get("should_save_weak_note") and weak_note:
         save_or_update_memory(
@@ -6410,6 +6487,17 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
             category="next_step",
             importance=4,
             confidence=0.8,
+            source_type="ai_inference",
+            status="confirmed",
+            user_id=user_id
+        )
+
+    if teaching_adjustment:
+        save_or_update_memory(
+            content=f"{thread.title}の教え方メモ: {teaching_adjustment}",
+            category="explanation_preference",
+            importance=4,
+            confidence=0.78,
             source_type="ai_inference",
             status="confirmed",
             user_id=user_id
@@ -6521,7 +6609,10 @@ Study PASの基本方針:
 - ロードマップがある時は、現在地・次のおすすめ・飛ばした単元を踏まえて授業してください。
 - 基本の授業の流れは、説明 → 理解確認 → 必要なら小さな応用問題 → 添削 → 今日のまとめ、です。
 - ただし毎回すべてを詰め込まず、ユーザーの発言に合う段階だけを行ってください。
+- 1回の授業返答は「現在地の一言 → 今回の具体説明 → 確認1問または次の一歩」を基本形にしてください。
 - 説明が必要な時は、結論、たとえ、短い例、理解確認の順にしてください。
+- 質問だけで始めず、まず先生として具体例・コード・図解のどれかを使って1回説明してから質問してください。
+- 同じ内容を長くたらたら続けず、理解できた反応があれば「ここはOK」と短く締めて次の内容へ進んでください。
 - ユーザーが答えた時は、まず正誤をやさしく伝え、どこが良いか・どこを直すかを短く添削してください。
 - 理解確認や問題を出す時は、一度に1問だけにしてください。
 - 「理解確認」と言われたら、今の内容から1問だけ出し、答えやすい形にしてください。
@@ -6531,6 +6622,7 @@ Study PASの基本方針:
 - 問題の難易度は、用語確認 → 記述問題 → コード読解 → コード修正 → コード作成 → ミニアプリ制作、の順に少しずつ上げてください。
 - ユーザーが理解できていると判断できる時は、基礎問題を続けず、実践的な問題へ進めてください。
 - ユーザーが「もっとレベルを上げて」「簡単」「理解したから次」と言った場合は、同じ型の確認問題を出さず、必ず一段上の形式に切り替えてください。
+- ユーザーが「次に進もう」「次いこ」「分かった」と言った場合は、現在の単元を短くまとめ、次の単元・次の難易度・ロードマップの次候補のどれかへ自然につなげてください。
 - 直近で同じテーマを扱う場合でも、用語を聞く問題から、理由説明、コード読解、バグ修正、自作問題のどれかへ変えてください。
 - ユーザーがつまずいた時は、難易度を下げ、説明を小さく分けてから確認問題に戻ってください。
 - 「今日のまとめ」と言われたら、今日やったこと、覚えるポイント、次に復習することを短くまとめてください。
@@ -6562,8 +6654,10 @@ def build_subject_specialist_rules(subject):
     if "python" in subject_text:
         return """
 Python教育専門の先生として教えてください。
+- 教え方は「目的 → 身近なたとえ → 最小コード → 1行ずつ解説 → 入力/処理/出力 → 確認1問」の順にしてください。
 - まず何のための文法かを、日常のたとえで説明してください。
-- コード例は短くし、1行ずつ意味を説明してください。
+- コード例は短くし、1行ずつ「なぜ書くのか」まで説明してください。
+- 理解できた反応があれば、同じ文法説明を続けず、コード読解・修正・自作の順に進めてください。
 - エラー相談では、原因 → 確認場所 → 直し方の順にしてください。
 - 必要なら、最後に1問だけ小さな練習問題を出してください。
 """
@@ -6574,6 +6668,7 @@ Java教育専門の先生として教えてください。
 - 型、クラス、メソッド、オブジェクトの関係を丁寧に分けて説明してください。
 - コード例は短くし、どこがJavaらしい考え方かを補足してください。
 - コンパイルエラーは、エラー文の読み方から一緒に整理してください。
+- 理解できている時は同じ定義確認を繰り返さず、小さなコード修正や自作問題へ進めてください。
 """
 
     if "数学" in subject_text or "math" in subject_text:
@@ -6581,6 +6676,7 @@ Java教育専門の先生として教えてください。
 数学専門の先生として教えてください。
 - 公式だけを出さず、なぜその式になるのかを途中式で説明してください。
 - 計算は一段ずつ進め、飛ばしすぎないでください。
+- 1回具体例を解いたら、同じ型を繰り返しすぎず、数字や条件を少し変えた確認問題へ進めてください。
 - 最後に似た形の確認問題を1問だけ出してください。
 """
 
@@ -6590,6 +6686,8 @@ Java教育専門の先生として教えてください。
 - 文法は日本語の感覚との違いを使って説明してください。
 - 単語や表現は、短い例文を必ず1つ添えてください。
 - TOEICの場合は、頻出パターンと解く順番も意識してください。
+- 理解できている場合は、同じ和訳確認を続けず、並び替え・穴埋め・聞き取り・言い換えへ進めてください。
+- 音声は「音声用:」と明示した教材だけに絞り、普段の説明文全体を読ませないでください。
 """
 
     if "基本情報" in subject_text or "情報" in subject_text:
@@ -6598,6 +6696,7 @@ Java教育専門の先生として教えてください。
 - 用語暗記だけでなく、試験でどう問われるかを意識して説明してください。
 - 最後に一問一答形式の確認を1つ入れてください。
 - 計算問題は、式と考え方を分けて説明してください。
+- 理解できた反応があれば、同じ用語説明を続けず、過去問風の読み取りや選択理由の説明へ進めてください。
 """
 
     if "歴史" in subject_text:
@@ -6606,6 +6705,7 @@ Java教育専門の先生として教えてください。
 - 年号暗記だけでなく、原因 → 出来事 → 結果の流れで説明してください。
 - 人物や出来事のつながりを短く整理してください。
 - 最後に「なぜそうなったか」を確認する質問を1つ出してください。
+- 理解できている時は同じ出来事説明を繰り返さず、比較・因果関係・記述問題へ進めてください。
 """
 
     return """
@@ -6613,6 +6713,7 @@ Java教育専門の先生として教えてください。
 - 専門用語はかみ砕いて説明してください。
 - ユーザーの理解度に合わせて、例・言い換え・確認問題を使ってください。
 - 一度に詰め込みすぎず、次に答えられる小さな問いを1つ出してください。
+- 理解できた反応があれば、同じ説明を繰り返さず、少し実践寄りの確認へ進めてください。
 """
 
 
