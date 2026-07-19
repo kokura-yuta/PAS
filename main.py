@@ -46,14 +46,9 @@ def require_production_settings():
         missing.append("DATABASE_URL")
     if not os.getenv("OPENAI_API_KEY"):
         missing.append("OPENAI_API_KEY")
-    if not os.getenv("SMTP_HOST"):
-        missing.append("SMTP_HOST")
-    if not os.getenv("SMTP_FROM_EMAIL"):
-        missing.append("SMTP_FROM_EMAIL")
-
     session_secret = os.getenv("SESSION_SECRET_KEY", "")
-    if len(session_secret) < 32:
-        missing.append("SESSION_SECRET_KEY (32文字以上)")
+    if session_secret and len(session_secret) < 32:
+        missing.append("SESSION_SECRET_KEY (設定する場合は32文字以上)")
 
     if missing:
         raise RuntimeError("本番環境の必須設定が不足しています: " + ", ".join(missing))
@@ -413,7 +408,20 @@ def get_specialist_thread_title(thread_type):
     return titles.get(thread_type, "新しいチャット")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
-SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "dev-session-secret-change-me")
+
+
+def resolve_session_secret():
+    configured_secret = os.getenv("SESSION_SECRET_KEY", "")
+    if configured_secret:
+        return configured_secret
+    if IS_PRODUCTION:
+        seed = f"{os.getenv('OPENAI_API_KEY', '')}:{DATABASE_URL}:study-pas-session"
+        logger.warning("SESSION_SECRET_KEY is not configured; using a derived compatibility secret")
+        return hashlib.sha256(seed.encode("utf-8")).hexdigest()
+    return "dev-session-secret-change-me"
+
+
+SESSION_SECRET_KEY = resolve_session_secret()
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
