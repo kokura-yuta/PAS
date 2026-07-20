@@ -75,7 +75,7 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "study-20260715-8")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "ux-20260719b")[:12]
 REMEMBER_COOKIE_NAME = "pas_remember_login"
 REMEMBER_LOGIN_DAYS = 30
 FITNESS_THREAD_TYPE = "fitness"
@@ -238,6 +238,18 @@ STUDY_MEMORY_CATEGORIES = {
     "lesson_report",
     "next_step"
 }
+STUDY_MEMORY_CATEGORY_LABELS = {
+    "understanding": "理解していること",
+    "weak_area": "苦手・つまずき",
+    "strong_area": "得意なこと",
+    "explanation_preference": "分かりやすい教え方",
+    "learning_goal": "学習目標",
+    "test_deadline": "テスト予定",
+    "assignment_deadline": "提出期限",
+    "study_habit": "学習習慣",
+    "lesson_report": "授業の記録",
+    "next_step": "次にやること"
+}
 STUDY_CONFUSION_WORDS = [
     "わからない",
     "分からない",
@@ -270,6 +282,7 @@ class ChatThreadCreatePayload(BaseModel):
 
 class ChatMessageCreatePayload(BaseModel):
     message: str = ""
+    retry_last: bool = False
 
 
 class RoadmapDeletePayload(BaseModel):
@@ -5425,6 +5438,10 @@ def load_memory_items(user_id):
             memory_items.append({
                 "id": memory.id,
                 "category": memory.category,
+                "category_label": STUDY_MEMORY_CATEGORY_LABELS.get(
+                    memory.category,
+                    "学習メモ"
+                ),
                 "content": memory.content,
                 "importance": normalize_importance(memory.importance),
                 "confidence": normalize_confidence(memory.confidence),
@@ -5631,13 +5648,29 @@ def load_settings(user_id):
         if settings is None:
             settings = Settings(user_id=user_id)
             db.add(settings)
+
+        settings_changed = False
+        if settings.default_persona != "friend":
+            settings.default_persona = "friend"
+            settings_changed = True
+        if settings.theme_name != "calm":
+            settings.theme_name = "calm"
+            settings_changed = True
+        if settings.response_length not in RESPONSE_LENGTH_PROMPTS:
+            settings.response_length = "auto"
+            settings_changed = True
+
+        if settings.id is None or settings_changed:
             db.commit()
+            db.refresh(settings)
+
+        db.expunge(settings)
 
         return settings
     finally:
         db.close()
 
-def save_settings(user_id, default_persona, theme_name, response_length):
+def save_settings(user_id, response_length):
     db = SessionLocal()
 
     try:
@@ -5652,9 +5685,13 @@ def save_settings(user_id, default_persona, theme_name, response_length):
             settings = Settings(user_id=user_id)
             db.add(settings)
 
-        settings.default_persona = default_persona
-        settings.theme_name = theme_name
-        settings.response_length = response_length
+        settings.default_persona = "friend"
+        settings.theme_name = "calm"
+        settings.response_length = (
+            response_length
+            if response_length in RESPONSE_LENGTH_PROMPTS
+            else "auto"
+        )
 
         db.commit()
     finally:
@@ -5678,7 +5715,26 @@ def format_goals_for_prompt(goals):
 
     return goals_text
 
-def load_messages(thread_id=None, user_id=None):
+def is_latest_user_message(thread_id, user_id, content):
+    db = SessionLocal()
+    try:
+        latest = (
+            db.query(ChatMessage)
+            .filter(ChatMessage.user_id == user_id)
+            .filter(ChatMessage.thread_id == thread_id)
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .first()
+        )
+        return bool(
+            latest
+            and latest.role == "user"
+            and (latest.content or "").strip() == (content or "").strip()
+        )
+    finally:
+        db.close()
+
+
+def load_messages(thread_id=None, user_id=None, skip_latest_user_content=None):
     db = SessionLocal()
 
     try:
@@ -5688,6 +5744,14 @@ def load_messages(thread_id=None, user_id=None):
             query = query.filter(ChatMessage.thread_id == thread_id)
 
         messages = query.order_by(ChatMessage.created_at.desc()).limit(CHAT_HISTORY_LIMIT).all()
+
+        if (
+            skip_latest_user_content is not None
+            and messages
+            and messages[0].role == "user"
+            and (messages[0].content or "").strip() == skip_latest_user_content.strip()
+        ):
+            messages = messages[1:]
 
         history =""
 
@@ -6858,37 +6922,10 @@ def save_study_learning_notes(thread, user_id, user_message, teacher_message, hi
 
 PAS_PERSONAS = {
     "friend": """
-あなたはPASです。
-親しい友達のように、自然で少し砕けた口調で返してください。
-固い敬語や説明口調を避け、「そっか」「それはきついね」のような自然な相づちを使ってください。
-相手の気持ちを先に受け止め、アドバイスは求められた時や必要な時だけ短く出してください。
-""",
-    "mentor": """
-あなたはPASです。
-ユーザーの成長を支えるメンターとして返してください。
-まず気持ちを受け止め、そのあと状況を一緒に整理してください。
-すぐに正解を押しつけず、ユーザーが自分で気づける質問を1つ入れてください。
-提案は最後に、次の一歩だけを具体的に出してください。
-""",
-    "strict_teacher": """
-あなたはPASです。
-厳しい先生として、甘やかさずに現実的な視点で返してください。
-言い訳や曖昧な考えがある場合は、短くはっきり指摘してください。
-ただし人格否定はせず、改善すべき行動・考え方・次の一手を具体的に示してください。
-長い説教は避け、刺さる一言と次の行動に絞ってください。
-""",
-    "secretary": """
-あなたはPASです。
-秘書として、感情表現よりも整理・要約・優先順位づけを重視して返してください。
-要点、現在の状況、次にやることを簡潔にまとめてください。
-無駄な雑談は控え、実務的で分かりやすい返答にしてください。
-""",
-    "life_coach": """
-あなたはPASです。
-ライフコーチとして、ユーザーの目標・価値観・長期的な成長を踏まえて返してください。
-すぐに答えを押しつけるのではなく、必要に応じて問いを使い、ユーザー自身が気づけるように支援してください。
-感情に寄り添いながら、前に進むための考え方や行動を提案してください。
-	"""
+あなたはStudy PASの優しい先生です。
+学習者を否定せず、分からない部分を小さく分けて説明してください。
+結論、短い具体例、理解確認1問の順で、自然で親しみやすく返してください。
+"""
 }
 RESPONSE_LENGTH_PROMPTS = {
     "auto": """
@@ -6952,7 +6989,7 @@ PAS_RESPONSE_RULES = """
 
 STUDY_TEACHER_RULES = """
 Study PASの基本方針:
-- あなたは「優しい先生」です。友達、厳しい先生、コーチ、秘書にはなりません。
+- あなたは一貫して「優しい先生」として教えてください。
 - 目的は、答えを出すことではなく、ユーザーが理解できるように教え方を育てることです。
 - 返答は短めに始めてください。必要な時だけ詳しく説明してください。
 - 「いい質問だね」「ここは最初つまずきやすいところだよ」のように、安心できる先生の入り方をしてください。
@@ -7377,9 +7414,18 @@ def serialize_thread(thread):
     return thread_data
 
 
-def prepare_ai_response_context(thread, user_id, clean_message):
+def prepare_ai_response_context(thread, user_id, clean_message, retry_last=False):
     is_study_thread = thread.thread_type == STUDY_THREAD_TYPE
-    history = load_messages(thread.id, user_id)
+    is_retry_of_latest = retry_last and is_latest_user_message(
+        thread.id,
+        user_id,
+        clean_message
+    )
+    history = load_messages(
+        thread.id,
+        user_id,
+        skip_latest_user_content=clean_message if is_retry_of_latest else None
+    )
     memories = load_memories(user_id)
     timeline_items = load_timeline_items(user_id)
     timeline_text = format_timeline_for_prompt(timeline_items)
@@ -7390,14 +7436,14 @@ def prepare_ai_response_context(thread, user_id, clean_message):
     goals = load_goals(user_id)
     goals_text = format_goals_for_prompt(goals)
     settings = load_settings(user_id)
-    persona = settings.default_persona
+    persona = "friend"
     response_length = settings.response_length
 
-    save_message("user", clean_message, thread.id, user_id)
+    if not is_retry_of_latest:
+        save_message("user", clean_message, thread.id, user_id)
 
     if is_study_thread:
         update_study_schedule_from_message(thread.id, user_id, clean_message)
-        record_study_activity(thread.id, user_id)
         thread = load_chat_thread(thread.id, user_id) or thread
         response_length = "auto"
 
@@ -7470,8 +7516,8 @@ def prepare_ai_response_context(thread, user_id, clean_message):
     }
 
 
-def process_chat_message(thread, user_id, clean_message):
-    context = prepare_ai_response_context(thread, user_id, clean_message)
+def process_chat_message(thread, user_id, clean_message, retry_last=False):
+    context = prepare_ai_response_context(thread, user_id, clean_message, retry_last=retry_last)
     thread = context["thread"]
     history = context["history"]
     is_study_thread = context["is_study_thread"]
@@ -7493,6 +7539,8 @@ def process_chat_message(thread, user_id, clean_message):
         save_message("assistant", ai_message, thread.id, user_id)
 
         if is_study_thread:
+            record_study_activity(thread.id, user_id)
+            thread = load_chat_thread(thread.id, user_id) or thread
             save_study_learning_notes(
                 thread=thread,
                 user_id=user_id,
@@ -7533,8 +7581,8 @@ def extract_stream_delta(event):
     return ""
 
 
-def stream_chat_message_events(thread, user_id, clean_message):
-    context = prepare_ai_response_context(thread, user_id, clean_message)
+def stream_chat_message_events(thread, user_id, clean_message, retry_last=False):
+    context = prepare_ai_response_context(thread, user_id, clean_message, retry_last=retry_last)
     thread = context["thread"]
     history = context["history"]
     is_study_thread = context["is_study_thread"]
@@ -7573,6 +7621,8 @@ def stream_chat_message_events(thread, user_id, clean_message):
             saved = True
 
             if is_study_thread:
+                record_study_activity(thread.id, user_id)
+                thread = load_chat_thread(thread.id, user_id) or thread
                 save_study_learning_notes(
                     thread=thread,
                     user_id=user_id,
@@ -7594,7 +7644,6 @@ def process_study_image_message(thread, user_id, clean_message, image_bytes, con
 
     if is_study_thread:
         update_study_schedule_from_message(thread.id, user_id, prompt_message)
-        record_study_activity(thread.id, user_id)
         thread = load_chat_thread(thread.id, user_id) or thread
 
     history = load_messages(thread.id, user_id)
@@ -7656,6 +7705,8 @@ def process_study_image_message(thread, user_id, clean_message, image_bytes, con
         save_message("assistant", ai_message, thread.id, user_id)
 
         if is_study_thread:
+            record_study_activity(thread.id, user_id)
+            thread = load_chat_thread(thread.id, user_id) or thread
             save_study_learning_notes(
                 thread=thread,
                 user_id=user_id,
@@ -8084,8 +8135,6 @@ def api_home(request: Request):
             "name": current_user.name
         },
         "settings": {
-            "theme_name": settings.theme_name,
-            "default_persona": settings.default_persona,
             "response_length": settings.response_length
         },
         "study_threads": study_threads,
@@ -8108,8 +8157,7 @@ def api_diary_chat(request: Request):
 
     return {
         "settings": {
-            "theme_name": settings.theme_name,
-            "default_persona": settings.default_persona
+            "response_length": settings.response_length
         },
         "thread": serialize_thread(study_thread),
         "messages": serialize_chat_items(chat_items)
@@ -8136,8 +8184,7 @@ def api_chat_thread(request: Request, thread_id: int):
 
     return {
         "settings": {
-            "theme_name": settings.theme_name,
-            "default_persona": settings.default_persona
+            "response_length": settings.response_length
         },
         "thread": serialize_thread(thread),
         "messages": serialize_chat_items(chat_items)
@@ -8194,7 +8241,12 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
     if len(clean_message) > CHAT_MESSAGE_MAX_LENGTH:
         return JSONResponse({"error": "message_too_long"}, status_code=400)
 
-    chat_items = process_chat_message(thread, current_user.id, clean_message)
+    chat_items = process_chat_message(
+        thread,
+        current_user.id,
+        clean_message,
+        retry_last=payload.retry_last
+    )
     thread = load_chat_thread(thread.id, current_user.id) or thread
 
     return {
@@ -8231,7 +8283,12 @@ def api_chat_message_stream(request: Request, thread_id: int, payload: ChatMessa
         return JSONResponse({"error": "message_too_long"}, status_code=400)
 
     return StreamingResponse(
-        stream_chat_message_events(thread, current_user.id, clean_message),
+        stream_chat_message_events(
+            thread,
+            current_user.id,
+            clean_message,
+            retry_last=payload.retry_last
+        ),
         media_type="text/event-stream"
     )
 
@@ -8573,7 +8630,8 @@ def memories_page(request: Request):
             "memories": memories,
             "pending_memories": pending_memories,
             "confirmed_memories": confirmed_memories,
-            "settings": settings
+            "settings": settings,
+            "asset_version": ASSET_VERSION
         }
     )
 
@@ -8834,16 +8892,15 @@ def settings_page(request: Request):
         request=request,
         name="settings.html",
         context={
-            "settings": settings
+            "settings": settings,
+            "asset_version": ASSET_VERSION
         }
     )
 
 @app.post("/settings")
 def settings_save(
     request: Request,
-    default_persona: str = Form("friend"),
-    theme_name: str = Form("calm"),
-    response_length: str = Form("balanced")
+    response_length: str = Form("auto")
 ):
     current_user = get_current_user(request)
 
@@ -8852,8 +8909,6 @@ def settings_save(
 
     save_settings(
         user_id=current_user.id,
-        default_persona=default_persona,
-        theme_name=theme_name,
         response_length=response_length
     )
 
@@ -8882,7 +8937,11 @@ def account_delete(request: Request, password: str = Form("")):
         return templates.TemplateResponse(
             request=request,
             name="settings.html",
-            context={"settings": settings, "account_error": "パスワードが正しくありません。"},
+            context={
+                "settings": settings,
+                "account_error": "パスワードが正しくありません。",
+                "asset_version": ASSET_VERSION
+            },
             status_code=400
         )
 
@@ -8898,7 +8957,7 @@ def privacy_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="privacy.html",
-        context={"settings": {"theme_name": "calm"}}
+        context={"asset_version": ASSET_VERSION}
     )
 
 @app.post("/chat/{thread_id}")

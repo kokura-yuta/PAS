@@ -13,6 +13,441 @@
     --card-bg: rgba(255, 255, 255, 0.74);
 }
 
+/* Study PAS共通の静的画面（設定・Memory・プライバシー） */
+.study-static-body {
+    --study-bg: #f7f7f5;
+    --study-surface-strong: rgba(255, 255, 255, 0.94);
+    --study-text: #161719;
+    --study-muted: #6e737a;
+    --study-line: rgba(22, 23, 25, 0.105);
+    --study-shadow-soft: 0 16px 44px rgba(22, 23, 25, 0.06);
+    --study-shadow-card: 0 26px 70px rgba(22, 23, 25, 0.09);
+    min-height: 100vh;
+    background: var(--study-bg);
+    color: var(--study-text);
+}
+
+.study-static-page,
+.study-static-page * {
+    box-sizing: border-box;
+}
+
+.study-static-page {
+    width: min(740px, 100%);
+    min-height: 100vh;
+    margin: 0 auto;
+    padding: 44px 26px 100px;
+}
+
+.study-static-header {
+    display: grid;
+    grid-template-columns: 76px minmax(0, 1fr) 76px;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 52px;
+}
+
+.study-static-header > a {
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+    text-decoration: none;
+}
+
+.study-static-header > a:last-child {
+    justify-self: end;
+}
+
+.study-static-header div {
+    min-width: 0;
+    text-align: center;
+}
+
+.study-static-header div span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--study-muted);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.study-static-header h1 {
+    margin: 0;
+    overflow: hidden;
+    font-size: 27px;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.study-static-intro {
+    margin-bottom: 28px;
+    padding: 4px 4px 8px;
+}
+
+.study-static-intro .section-kicker {
+    margin: 0 0 10px;
+    color: var(--study-muted);
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.study-static-intro h2 {
+    margin: 0;
+    font-size: clamp(28px, 5vw, 42px);
+    line-height: 1.18;
+    letter-spacing: -0.035em;
+}
+
+.study-static-intro > p:last-child {
+    max-width: 620px;
+    margin: 16px 0 0;
+    color: var(--study-muted);
+    font-size: 15px;
+    line-height: 1.8;
+}
+
+.study-static-card,
+.memory-card,
+.study-empty-card,
+.study-policy-list article {
+    border: 1px solid var(--study-line);
+    background: var(--study-surface-strong);
+    box-shadow: var(--study-shadow-soft);
+}
+
+.study-static-card {
+    margin-top: 16px;
+    padding: 24px;
+    border-radius: 24px;
+}
+
+.study-static-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 18px;
+}
+
+.study-static-section-head span {
+    display: block;
+    margin-bottom: 5px;
+    color: var(--study-muted);
+    font-size: 11px;
+    font-weight: 850;
+}
+
+.study-static-section-head h2 {
+    margin: 0;
+    font-size: 21px;
+    line-height: 1.35;
+}
+
+.study-static-section-head em {
+    flex: 0 0 auto;
+    padding: 6px 10px;
+    border-radius: 999px;
+    background: rgba(22, 23, 25, 0.055);
+    color: var(--study-muted);
+    font-size: 12px;
+    font-style: normal;
+    font-weight: 800;
+}
+
+.study-settings-form,
+.study-danger-card form,
+.study-memory-page .memory-edit form {
+    display: grid;
+    gap: 12px;
+    width: 100%;
+    max-width: none;
+    margin: 0;
+}
+
+.study-settings-form label,
+.study-danger-card label,
+.study-memory-page .memory-edit label {
+    margin: 0;
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.study-settings-form select,
+.study-danger-card input,
+.study-memory-page .memory-edit textarea {
+    width: 100%;
+    min-height: 50px;
+    padding: 12px 14px;
+    border: 1px solid var(--study-line);
+    border-radius: 15px;
+    background: #ffffff;
+    color: var(--study-text);
+    font: inherit;
+    font-size: 16px;
+    outline: none;
+}
+
+.study-settings-form button,
+.study-danger-card button,
+.study-memory-page button[type="submit"],
+.study-empty-card a {
+    min-height: 44px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-text);
+    color: #ffffff;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.study-data-links {
+    display: grid;
+    gap: 8px;
+}
+
+.study-data-links a {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    min-height: 58px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(22, 23, 25, 0.045);
+    color: var(--study-text);
+    text-decoration: none;
+}
+
+.study-data-links span {
+    color: var(--study-muted);
+    font-size: 13px;
+}
+
+.study-data-links strong {
+    font-size: 14px;
+    text-align: right;
+}
+
+.study-danger-card {
+    margin-top: 18px;
+    border: 1px solid rgba(185, 28, 28, 0.14);
+    border-radius: 20px;
+    background: rgba(255, 255, 255, 0.58);
+}
+
+.study-danger-card summary {
+    padding: 18px 20px;
+    color: #8f2d2d;
+    font-size: 14px;
+    font-weight: 850;
+    cursor: pointer;
+}
+
+.study-danger-card > div {
+    padding: 0 20px 20px;
+}
+
+.study-danger-card p {
+    margin: 0 0 16px;
+    color: var(--study-muted);
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.study-danger-card button {
+    background: #9f3030;
+}
+
+.study-memory-page .memory-section {
+    max-width: none;
+    margin: 36px 0 0;
+}
+
+.study-memory-page .memory-section > p {
+    margin: -8px 0 18px;
+    color: var(--study-muted);
+    font-size: 14px;
+    line-height: 1.7;
+}
+
+.study-memory-page .memory-cards {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.study-memory-page .memory-card {
+    min-width: 0;
+    padding: 18px;
+    border: 1px solid var(--study-line);
+    border-radius: 20px;
+    background: var(--study-surface-strong);
+    box-shadow: var(--study-shadow-soft);
+}
+
+.study-memory-page .memory-card-pending {
+    border-color: rgba(22, 23, 25, 0.24);
+    box-shadow: var(--study-shadow-card);
+}
+
+.study-memory-page .memory-card-header {
+    margin-bottom: 14px;
+}
+
+.study-memory-page .memory-card-header strong {
+    font-size: 13px;
+}
+
+.study-memory-page .memory-card-header span {
+    background: rgba(22, 23, 25, 0.055);
+    color: var(--study-muted);
+}
+
+.study-memory-page .memory-card > p {
+    margin: 0 0 12px;
+    font-size: 15px;
+    line-height: 1.75;
+}
+
+.study-memory-page .memory-card small {
+    display: block;
+    color: var(--study-muted);
+    font-size: 11px;
+}
+
+.study-memory-page .memory-edit summary {
+    margin-top: 14px;
+    color: var(--study-muted);
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.study-memory-page .memory-edit textarea {
+    min-height: 104px;
+    resize: vertical;
+}
+
+.study-memory-page .memory-actions {
+    margin-top: 16px;
+}
+
+.study-memory-page .memory-actions form {
+    flex: 1 1 120px;
+}
+
+.study-memory-page .memory-actions button {
+    width: 100%;
+}
+
+.study-memory-page button.secondary-button {
+    border: 1px solid var(--study-line);
+    background: transparent;
+    color: var(--study-muted);
+}
+
+.study-empty-card {
+    padding: 30px;
+    border-radius: 24px;
+    text-align: center;
+}
+
+.study-empty-card span {
+    color: var(--study-muted);
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.study-empty-card h2 {
+    margin: 10px 0;
+    font-size: 22px;
+}
+
+.study-empty-card p {
+    margin: 0 auto 20px;
+    color: var(--study-muted);
+    line-height: 1.7;
+}
+
+.study-empty-card a {
+    display: inline-grid;
+    align-items: center;
+    text-decoration: none;
+}
+
+.study-policy-list {
+    display: grid;
+    gap: 12px;
+}
+
+.study-policy-list article {
+    display: grid;
+    grid-template-columns: 42px minmax(0, 1fr);
+    gap: 14px;
+    padding: 20px;
+    border-radius: 20px;
+}
+
+.study-policy-list article > span {
+    color: var(--study-muted);
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.study-policy-list h2 {
+    margin: 0 0 7px;
+    font-size: 18px;
+}
+
+.study-policy-list p {
+    margin: 0;
+    color: var(--study-muted);
+    font-size: 14px;
+    line-height: 1.75;
+}
+
+@media (max-width: 640px) {
+    .study-static-page {
+        padding: 30px 18px 80px;
+    }
+
+    .study-static-header {
+        grid-template-columns: 52px minmax(0, 1fr) 52px;
+        margin-bottom: 38px;
+    }
+
+    .study-static-header h1 {
+        font-size: 23px;
+    }
+
+    .study-static-intro h2 {
+        font-size: 31px;
+    }
+
+    .study-static-card {
+        padding: 18px;
+        border-radius: 20px;
+    }
+
+    .study-data-links a {
+        align-items: flex-start;
+        flex-direction: column;
+        gap: 4px;
+    }
+
+    .study-data-links strong {
+        text-align: left;
+    }
+
+    .study-memory-page .memory-cards {
+        grid-template-columns: 1fr;
+    }
+}
+
 .study-app {
     --study-bg: #f7f7f5;
     --study-surface: rgba(255, 255, 255, 0.76);
@@ -798,14 +1233,13 @@ body:has(.study-app) {
 
 .lesson-actions {
     display: flex;
-    flex-wrap: nowrap;
+    flex-wrap: wrap;
     gap: 8px;
     width: 100%;
     margin: 0;
     padding: 0 2px 2px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    scrollbar-width: none;
+    overflow: visible;
+    box-sizing: border-box;
 }
 
 .lesson-actions::-webkit-scrollbar {
@@ -830,6 +1264,78 @@ body:has(.study-app) {
 .lesson-actions button:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+}
+
+.lesson-more-actions {
+    position: relative;
+    flex: 0 0 auto;
+}
+
+.lesson-more-actions summary {
+    display: grid;
+    min-height: 38px;
+    padding: 0 13px;
+    place-items: center;
+    border: 1px solid var(--study-line);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.84);
+    color: var(--study-text);
+    box-shadow: 0 10px 24px rgba(21, 23, 25, 0.08);
+    font-size: 13px;
+    font-weight: 800;
+    cursor: pointer;
+    list-style: none;
+}
+
+.lesson-more-actions summary::-webkit-details-marker {
+    display: none;
+}
+
+.lesson-more-panel {
+    position: absolute;
+    right: 0;
+    bottom: calc(100% + 8px);
+    z-index: 4;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+    width: min(310px, calc(100vw - 32px));
+    padding: 10px;
+    border: 1px solid var(--study-line);
+    border-radius: 18px;
+    background: var(--study-surface-strong);
+    box-shadow: var(--study-shadow-float);
+}
+
+.lesson-more-panel button {
+    width: 100%;
+    white-space: normal;
+}
+
+.error-retry-notice {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-radius: 16px;
+}
+
+.error-retry-notice p {
+    margin: 0;
+}
+
+.error-retry-notice button {
+    flex: 0 0 auto;
+    min-height: 36px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 999px;
+    background: var(--study-text);
+    color: #ffffff;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 800;
+    cursor: pointer;
 }
 
 .study-chat-log {
@@ -1175,6 +1681,11 @@ body:has(.study-app) {
     gap: 8px;
     width: min(720px, calc(100% - 28px));
     box-sizing: border-box;
+}
+
+.study-chat-controls > * {
+    min-width: 0;
+    max-width: 100%;
 }
 
 .study-chat-form {
@@ -2751,6 +3262,37 @@ body:has(.study-app) {
         width: calc(100% - 24px);
     }
 
+    .lesson-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        width: 100%;
+        padding-inline: 0;
+    }
+
+    .lesson-actions > button,
+    .lesson-more-actions,
+    .lesson-more-actions summary {
+        width: 100%;
+        min-width: 0;
+        box-sizing: border-box;
+    }
+
+    .lesson-more-actions[open] {
+        grid-column: 1 / -1;
+    }
+
+    .lesson-more-panel {
+        right: 0;
+        left: 0;
+        width: 100%;
+        box-sizing: border-box;
+    }
+
+    .error-retry-notice {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
     .study-chat-form {
         width: 100%;
         padding: 7px;
@@ -3766,6 +4308,13 @@ body {
     border-radius: 8px;
     background: rgba(220, 38, 38, 0.08);
     color: #b91c1c;
+}
+
+.field-hint {
+    margin: 7px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.55;
 }
 
 .form-success {

@@ -6,7 +6,7 @@
     <title>Study PAS</title>
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
-<body class="theme-{{ settings.theme_name }}">
+<body class="theme-calm">
     <div id="pas-react-root">
         <main class="study-app">
             <p class="eyebrow">Study PAS</p>
@@ -17,8 +17,7 @@
 
     <script>
         window.PAS_BOOTSTRAP = {
-            userName: {{ current_user.name|tojson }},
-            themeName: {{ settings.theme_name|tojson }}
+            userName: {{ current_user.name|tojson }}
         };
     </script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>

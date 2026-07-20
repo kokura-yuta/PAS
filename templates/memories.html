@@ -3,71 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAS Memories</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>Memory | Study PAS</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
-<body class="theme-{{ settings.theme_name }}">
-    <main class="page">
-        <h1>長期記憶</h1>
+<body class="study-static-body">
+    <main class="study-static-page study-memory-page">
+        <header class="study-static-header">
+            <a href="/" aria-label="ホームへ戻る">戻る</a>
+            <div>
+                <span>Study PAS</span>
+                <h1>Memory</h1>
+            </div>
+            <a href="/settings">設定</a>
+        </header>
+
+        <section class="study-static-intro">
+            <p class="section-kicker">Shared Memory</p>
+            <h2>先生が覚えていること</h2>
+            <p>どの科目でも共有され、説明や復習の提案に使われます。違う内容は編集・削除できます。</p>
+        </section>
 
         {% if pending_memories %}
             <section class="memory-section">
-                <h2>確認待ちの記憶</h2>
-                <p>AIが「覚えておくと役立ちそう」と判断した内容です。合っていたら確定してください。</p>
+                <div class="study-static-section-head">
+                    <div>
+                        <span>確認待ち</span>
+                        <h2>先生からの確認</h2>
+                    </div>
+                    <em>{{ pending_memories|length }}件</em>
+                </div>
+                <p>会話から見つけた学習情報です。合っていれば確定してください。</p>
 
                 <div class="memory-cards">
                     {% for memory in pending_memories %}
                         <article class="memory-card memory-card-pending">
                             <div class="memory-card-header">
-                                <strong>[{{ memory.category }}]</strong>
+                                <strong>{{ memory.category_label }}</strong>
                                 <span>{{ memory.status_label }}</span>
                             </div>
                             <p>{{ memory.content }}</p>
-                            <small>
-                                重要度: {{ memory.importance }}
-                                / 確信度: {{ memory.confidence }}
-                                / 情報源: {{ memory.source_label }}
-                                / 保存日: {{ memory.created_at_text }}
-                            </small>
+                            <small>{{ memory.created_at_text }}に記録</small>
 
                             <details class="memory-edit">
-                                <summary>編集する</summary>
+                                <summary>内容を修正</summary>
                                 <form method="post" action="/memories/{{ memory.id }}/update">
-                                    <label>
-                                        種類
-                                        <input type="text" name="category" value="{{ memory.category }}">
-                                    </label>
-
-                                    <label>
-                                        内容
-                                        <textarea name="content">{{ memory.content }}</textarea>
-                                    </label>
-
-                                    <label>
-                                        重要度
-                                        <select name="importance">
-                                            {% for value in [1, 2, 3, 4, 5] %}
-                                                <option value="{{ value }}" {% if memory.importance == value %}selected{% endif %}>{{ value }}</option>
-                                            {% endfor %}
-                                        </select>
-                                    </label>
-
-                                    <label>
-                                        確信度
-                                        <input type="number" name="confidence" value="{{ memory.confidence }}" min="0" max="1" step="0.05">
-                                    </label>
-
+                                    <label for="pending-memory-{{ memory.id }}">覚えておく内容</label>
+                                    <textarea id="pending-memory-{{ memory.id }}" name="content" required>{{ memory.content }}</textarea>
+                                    <input type="hidden" name="category" value="{{ memory.category }}">
+                                    <input type="hidden" name="importance" value="{{ memory.importance }}">
+                                    <input type="hidden" name="confidence" value="{{ memory.confidence }}">
                                     <button type="submit">修正して確定</button>
                                 </form>
                             </details>
 
                             <div class="memory-actions">
                                 <form method="post" action="/memories/{{ memory.id }}/confirm">
-                                    <button type="submit">確定する</button>
+                                    <button type="submit">合っています</button>
                                 </form>
 
                                 <form method="post" action="/memories/{{ memory.id }}/delete">
-                                    <button class="secondary-button" type="submit">削除</button>
+                                    <button class="secondary-button" type="submit">違うので削除</button>
                                 </form>
                             </div>
                         </article>
@@ -78,53 +73,32 @@
 
         {% if confirmed_memories %}
             <section class="memory-section">
-                <h2>確定済みの記憶</h2>
+                <div class="study-static-section-head">
+                    <div>
+                        <span>記憶済み</span>
+                        <h2>授業で共有すること</h2>
+                    </div>
+                    <em>{{ confirmed_memories|length }}件</em>
+                </div>
 
                 <div class="memory-cards">
                     {% for memory in confirmed_memories %}
                         <article class="memory-card">
                             <div class="memory-card-header">
-                                <strong>[{{ memory.category }}]</strong>
+                                <strong>{{ memory.category_label }}</strong>
                                 <span>{{ memory.status_label }}</span>
                             </div>
                             <p>{{ memory.content }}</p>
-                            <small>
-                                重要度: {{ memory.importance }}
-                                / 確信度: {{ memory.confidence }}
-                                / 情報源: {{ memory.source_label }}
-                                / 保存日: {{ memory.created_at_text }}
-                                {% if memory.last_confirmed_text %}
-                                    / 最終確認: {{ memory.last_confirmed_text }}
-                                {% endif %}
-                            </small>
+                            <small>{{ memory.created_at_text }}に記録{% if memory.last_confirmed_text %}・{{ memory.last_confirmed_text }}に確認{% endif %}</small>
 
                             <details class="memory-edit">
-                                <summary>編集する</summary>
+                                <summary>内容を編集</summary>
                                 <form method="post" action="/memories/{{ memory.id }}/update">
-                                    <label>
-                                        種類
-                                        <input type="text" name="category" value="{{ memory.category }}">
-                                    </label>
-
-                                    <label>
-                                        内容
-                                        <textarea name="content">{{ memory.content }}</textarea>
-                                    </label>
-
-                                    <label>
-                                        重要度
-                                        <select name="importance">
-                                            {% for value in [1, 2, 3, 4, 5] %}
-                                                <option value="{{ value }}" {% if memory.importance == value %}selected{% endif %}>{{ value }}</option>
-                                            {% endfor %}
-                                        </select>
-                                    </label>
-
-                                    <label>
-                                        確信度
-                                        <input type="number" name="confidence" value="{{ memory.confidence }}" min="0" max="1" step="0.05">
-                                    </label>
-
+                                    <label for="memory-{{ memory.id }}">覚えておく内容</label>
+                                    <textarea id="memory-{{ memory.id }}" name="content" required>{{ memory.content }}</textarea>
+                                    <input type="hidden" name="category" value="{{ memory.category }}">
+                                    <input type="hidden" name="importance" value="{{ memory.importance }}">
+                                    <input type="hidden" name="confidence" value="{{ memory.confidence }}">
                                     <button type="submit">保存する</button>
                                 </form>
                             </details>
@@ -140,11 +114,14 @@
             </section>
         {% else %}
             {% if not pending_memories %}
-                <p>まだ長期記憶はありません。</p>
+                <section class="study-empty-card">
+                    <span>Memory</span>
+                    <h2>まだ覚えていることはありません</h2>
+                    <p>授業を重ねると、苦手な単元や分かりやすい説明方法を少しずつ覚えます。</p>
+                    <a href="/">授業を始める</a>
+                </section>
             {% endif %}
         {% endif %}
-
-        <a class="back-link" href="/">ホームへ戻る</a>
     </main>
 </body>
 </html>

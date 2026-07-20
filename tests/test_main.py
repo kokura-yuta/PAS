@@ -163,6 +163,139 @@ class StudyPasTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 429)
         self.assertEqual(response.json()["error"], "daily_ai_limit_reached")
 
+    def test_failed_ai_does_not_count_as_study_and_retry_does_not_duplicate_user(self):
+        self.signup()
+        created = self.client.post("/api/chat_threads", json={"title": "世界史"})
+        thread_id = created.json()["thread"]["id"]
+        with main.SessionLocal() as db:
+            user = db.query(main.User).first()
+            user_id = user.id
+
+        thread = main.load_chat_thread(thread_id, user_id)
+        original_client = main.client
+
+        class FailingResponses:
+            def create(self, **kwargs):
+                raise RuntimeError("test failure")
+
+        class FailingClient:
+            responses = FailingResponses()
+
+        main.client = FailingClient()
+        try:
+            main.process_chat_message(thread, user_id, "短い質問")
+        finally:
+            main.client = original_client
+
+        failed_thread = main.load_chat_thread(thread_id, user_id)
+        self.assertEqual(failed_thread.study_session_count, 0)
+
+        with main.SessionLocal() as db:
+            self.assertEqual(
+                db.query(main.ChatMessage).filter(main.ChatMessage.user_id == user_id).filter(main.ChatMessage.role == "user").count(),
+                1
+            )
+            self.assertEqual(
+                db.query(main.ChatMessage).filter(main.ChatMessage.user_id == user_id).filter(main.ChatMessage.role == "assistant").count(),
+                0
+            )
+
+        class SuccessfulResponse:
+            output_text = "短い説明です。"
+
+        class SuccessfulResponses:
+            def create(self, **kwargs):
+                return SuccessfulResponse()
+
+        class SuccessfulClient:
+            responses = SuccessfulResponses()
+
+        main.client = SuccessfulClient()
+        try:
+            main.process_chat_message(thread, user_id, "短い質問", retry_last=True)
+        finally:
+            main.client = original_client
+
+        successful_thread = main.load_chat_thread(thread_id, user_id)
+        self.assertEqual(successful_thread.study_session_count, 1)
+        with main.SessionLocal() as db:
+            self.assertEqual(
+                db.query(main.ChatMessage).filter(main.ChatMessage.user_id == user_id).filter(main.ChatMessage.role == "user").count(),
+                1
+            )
+            self.assertEqual(
+                db.query(main.ChatMessage).filter(main.ChatMessage.user_id == user_id).filter(main.ChatMessage.role == "assistant").count(),
+                1
+            )
+
+    def test_auth_forms_have_accessible_labels_and_password_hint(self):
+        signup = self.client.get("/signup")
+        self.assertEqual(signup.status_code, 200)
+        self.assertIn('for="signup-name"', signup.text)
+        self.assertIn('id="signup-name"', signup.text)
+        self.assertIn('for="signup-email"', signup.text)
+        self.assertIn('for="signup-password"', signup.text)
+        self.assertIn("8文字以上で設定してください", signup.text)
+
+        login = self.client.get("/login")
+        self.assertEqual(login.status_code, 200)
+        self.assertIn('for="login-email"', login.text)
+        self.assertIn('for="login-password"', login.text)
+
+    def test_settings_are_fixed_to_study_pas_style(self):
+        self.signup()
+        with main.SessionLocal() as db:
+            settings = db.query(main.Settings).first()
+            settings.default_persona = "mentor"
+            settings.theme_name = "deep"
+            db.commit()
+
+        page = self.client.get("/settings")
+        self.assertEqual(page.status_code, 200)
+        self.assertNotIn("メンター", page.text)
+        self.assertNotIn("テーマ", page.text)
+        self.assertIn("優しい先生に統一されています", page.text)
+
+        response = self.client.post(
+            "/settings",
+            data={
+                "response_length": "concise",
+                "default_persona": "strict_teacher",
+                "theme_name": "warm"
+            },
+            follow_redirects=False
+        )
+        self.assertEqual(response.status_code, 303)
+        with main.SessionLocal() as db:
+            settings = db.query(main.Settings).first()
+            self.assertEqual(settings.default_persona, "friend")
+            self.assertEqual(settings.theme_name, "calm")
+            self.assertEqual(settings.response_length, "concise")
+
+    def test_memory_page_uses_study_labels_without_internal_scores(self):
+        self.signup()
+        with main.SessionLocal() as db:
+            user = db.query(main.User).first()
+            db.add(main.Memory(
+                user_id=user.id,
+                category="weak_area",
+                content="分数の通分でつまずきやすい",
+                importance=5,
+                confidence=0.75,
+                source_type="ai_inference",
+                status="confirmed",
+                is_active=True
+            ))
+            db.commit()
+
+        response = self.client.get("/memories")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("先生が覚えていること", response.text)
+        self.assertIn("苦手・つまずき", response.text)
+        self.assertIn("分数の通分でつまずきやすい", response.text)
+        self.assertNotIn("確信度:", response.text)
+        self.assertNotIn("重要度:", response.text)
+
 
 if __name__ == "__main__":
     unittest.main()

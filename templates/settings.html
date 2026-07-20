@@ -3,64 +3,71 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAS Settings</title>
-    <link rel="stylesheet" href="/static/style.css">
+    <title>設定 | Study PAS</title>
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
-<body class="theme-{{ settings.theme_name }}">
-    <main class="page">
-        <h1>設定</h1>
+<body class="study-static-body">
+    <main class="study-static-page">
+        <header class="study-static-header">
+            <a href="/" aria-label="ホームへ戻る">戻る</a>
+            <div>
+                <span>Study PAS</span>
+                <h1>設定</h1>
+            </div>
+            <span aria-hidden="true"></span>
+        </header>
 
-        <form method="post" action="/settings">
-            <label>基本の性格</label><br>
-            <select name="default_persona">
-                <option value="friend" {% if settings.default_persona == "friend" %}selected{% endif %}>友達</option>
-                <option value="mentor" {% if settings.default_persona == "mentor" %}selected{% endif %}>メンター</option>
-                <option value="strict_teacher" {% if settings.default_persona == "strict_teacher" %}selected{% endif %}>厳しい先生</option>
-                <option value="secretary" {% if settings.default_persona == "secretary" %}selected{% endif %}>秘書</option>
-                <option value="life_coach" {% if settings.default_persona == "life_coach" %}selected{% endif %}>ライフコーチ</option>
-            </select>
+        <section class="study-static-intro">
+            <p class="section-kicker">Teacher</p>
+            <h2>優しい先生に統一されています</h2>
+            <p>科目が変わっても、理解度や苦手に合わせて同じ先生が教え方を育てます。</p>
+        </section>
 
-            <br><br>
+        <section class="study-static-card">
+            <div class="study-static-section-head">
+                <div>
+                    <span>回答設定</span>
+                    <h2>説明の詳しさ</h2>
+                </div>
+            </div>
+            <form class="study-settings-form" method="post" action="/settings">
+                <label for="response-length">普段の説明量</label>
+                <select id="response-length" name="response_length">
+                    <option value="auto" {% if settings.response_length == "auto" %}selected{% endif %}>質問に合わせて自動</option>
+                    <option value="concise" {% if settings.response_length == "concise" %}selected{% endif %}>短め</option>
+                    <option value="balanced" {% if settings.response_length == "balanced" %}selected{% endif %}>標準</option>
+                    <option value="detailed" {% if settings.response_length == "detailed" %}selected{% endif %}>詳しめ</option>
+                </select>
+                <button type="submit">保存する</button>
+            </form>
+        </section>
 
-            <label>テーマ</label><br>
-            <select name="theme_name">
-                <option value="calm" {% if settings.theme_name == "calm" %}selected{% endif %}>Calm</option>
-                <option value="deep" {% if settings.theme_name == "deep" %}selected{% endif %}>Deep</option>
-                <option value="forest" {% if settings.theme_name == "forest" %}selected{% endif %}>Forest</option>
-                <option value="warm" {% if settings.theme_name == "warm" %}selected{% endif %}>Warm</option>
-            </select>
+        <section class="study-static-card">
+            <div class="study-static-section-head">
+                <div>
+                    <span>Data</span>
+                    <h2>データとプライバシー</h2>
+                </div>
+            </div>
+            <nav class="study-data-links" aria-label="データ管理">
+                <a href="/memories"><span>先生が覚えていること</span><strong>Memoryを確認</strong></a>
+                <a href="/account/export"><span>保存データ</span><strong>JSONで書き出す</strong></a>
+                <a href="/privacy"><span>データの扱い</span><strong>説明を確認</strong></a>
+            </nav>
+        </section>
 
-            <br><br>
-            <label>返答の長さ</label><br>
-            <select name="response_length">
-                <option value="auto" {% if settings.response_length == "auto" %}selected{% endif %}>自動</option>
-                <option value="concise" {% if settings.response_length == "concise" %}selected{% endif %}>短め</option>
-                <option value="balanced" {% if settings.response_length == "balanced" %}selected{% endif %}>普通・臨機応変</option>
-                <option value="detailed" {% if settings.response_length == "detailed" %}selected{% endif %}>詳しめ</option>
-            </select>
-
-            <br><br>
-            <button type="submit">設定を保存</button>
-        </form>
-
-        <hr>
-        <h2>データとプライバシー</h2>
-        <p>保存されている自分のデータをJSON形式で取得できます。</p>
-        <p><a href="/account/export">自分のデータを書き出す</a></p>
-        <p><a href="/privacy">プライバシーと利用上の注意</a></p>
-
-        <hr>
-        <h2>アカウントを削除</h2>
-        <p>チャット、記憶、教材など、アカウントに紐づくデータをすべて削除します。この操作は元に戻せません。</p>
-        {% if account_error|default('') %}<p class="error">{{ account_error }}</p>{% endif %}
-        <form method="post" action="/account/delete" onsubmit="return confirm('アカウントと保存データを完全に削除しますか？')">
-            <label for="delete-password">確認のためパスワードを入力</label><br>
-            <input id="delete-password" type="password" name="password" autocomplete="current-password" required>
-            <br><br>
-            <button type="submit">アカウントを完全に削除</button>
-        </form>
-
-        <a class="back-link" href="/">ホームへ戻る</a>
+        <details class="study-danger-card" {% if account_error|default('') %}open{% endif %}>
+            <summary>アカウントを削除</summary>
+            <div>
+                <p>チャット、Memory、教材、ロードマップをすべて削除します。この操作は元に戻せません。</p>
+                {% if account_error|default('') %}<p class="form-error" role="alert">{{ account_error }}</p>{% endif %}
+                <form method="post" action="/account/delete" onsubmit="return confirm('アカウントと保存データを完全に削除しますか？')">
+                    <label for="delete-password">確認のためパスワードを入力</label>
+                    <input id="delete-password" type="password" name="password" autocomplete="current-password" required>
+                    <button type="submit">完全に削除する</button>
+                </form>
+            </div>
+        </details>
     </main>
 </body>
 </html>

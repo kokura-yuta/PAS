@@ -2450,6 +2450,7 @@
         const [sending, setSending] = useState(false);
         const [sendingLabel, setSendingLabel] = useState("");
         const [error, setError] = useState("");
+        const [failedRequest, setFailedRequest] = useState(null);
         const [textbookPreview, setTextbookPreview] = useState(null);
         const [previewingTextbook, setPreviewingTextbook] = useState(false);
         const [savingTextbook, setSavingTextbook] = useState(false);
@@ -2467,6 +2468,7 @@
             let active = true;
             setChatData(null);
             setError("");
+            setFailedRequest(null);
             setFile(null);
             setTextbookPreview(null);
 
@@ -2559,7 +2561,7 @@
             }
         }
 
-        async function postTextMessage(cleanMessage, displayMessage) {
+        async function postTextMessage(cleanMessage, displayMessage, retryLast) {
             if (!cleanMessage || !chatData || sending) {
                 return;
             }
@@ -2568,23 +2570,29 @@
             const tempId = `stream-${Date.now()}`;
             abortControllerRef.current = controller;
             streamingAssistantRef.current = "";
+            let streamFailed = false;
             setSending(true);
             startThinkingLabels(THINKING_LABELS);
             setError("");
+            setFailedRequest(null);
             shouldScrollToBottomRef.current = true;
             setChatData({
                 ...chatData,
-                messages: chatData.messages.concat([
-                    { role: "user", content: displayMessage || cleanMessage, created_at: "" },
-                    { role: "assistant", content: "", created_at: "", temp_id: tempId }
-                ])
+                messages: chatData.messages.concat(
+                    retryLast
+                        ? [{ role: "assistant", content: "", created_at: "", temp_id: tempId }]
+                        : [
+                            { role: "user", content: displayMessage || cleanMessage, created_at: "" },
+                            { role: "assistant", content: "", created_at: "", temp_id: tempId }
+                        ]
+                )
             });
             setMessage("");
 
             try {
                 await streamApi(`/api/chat/${chatData.thread.id}/messages/stream`, {
                     method: "POST",
-                    body: JSON.stringify({ message: cleanMessage }),
+                    body: JSON.stringify({ message: cleanMessage, retry_last: Boolean(retryLast) }),
                     signal: controller.signal
                 }, function (eventName, data) {
                     if (eventName === "delta" && data.text) {
@@ -2593,12 +2601,22 @@
                     }
 
                     if (eventName === "error" && data.message) {
+                        streamFailed = true;
                         setError(data.message);
+                        setFailedRequest({
+                            message: cleanMessage,
+                            displayMessage: displayMessage || cleanMessage
+                        });
                     }
                 });
             } catch (err) {
                 if (err.name !== "AbortError") {
+                    streamFailed = true;
                     setError("送信できませんでした。もう一度試してください。");
+                    setFailedRequest({
+                        message: cleanMessage,
+                        displayMessage: displayMessage || cleanMessage
+                    });
                 }
             } finally {
                 abortControllerRef.current = null;
@@ -2607,6 +2625,18 @@
                 setSendingLabel("");
                 window.setTimeout(syncChatAfterStream, 180);
             }
+        }
+
+        function retryFailedMessage() {
+            if (!failedRequest || sending) {
+                return;
+            }
+
+            postTextMessage(
+                failedRequest.message,
+                failedRequest.displayMessage,
+                true
+            );
         }
 
         function stopGenerating() {
@@ -2835,8 +2865,10 @@
         const context = thread && thread.study_context ? thread.study_context : {};
         const lessonActions = [
             {
-                label: "ロードマップ通り",
-                message: "ロードマップ通りに進もう。現在地から授業を始めてください。"
+                label: thread && thread.has_roadmap ? "ロードマップ通り" : "ロードマップを作る",
+                message: thread && thread.has_roadmap
+                    ? "ロードマップ通りに進もう。現在地から授業を始めてください。"
+                    : "この科目を学ぶためのロードマップを、今の目標を確認してから一緒に作ってください。"
             },
             {
                 label: "理解確認",
@@ -2863,6 +2895,8 @@
                 message: "今までの会話から、僕がつまずいているところを短く整理して、次に何を復習すべきか教えてください。"
             }
         ];
+        const primaryLessonActions = lessonActions.slice(0, 2);
+        const secondaryLessonActions = lessonActions.slice(2);
 
         return h(
             "main",
@@ -2993,7 +3027,24 @@
                         : null
                 )
                 : null,
-            error ? h("p", { className: "notice" }, error) : null,
+            error
+                ? h(
+                    "div",
+                    { className: "notice error-retry-notice", role: "alert" },
+                    h("p", null, error),
+                    failedRequest
+                        ? h(
+                            "button",
+                            {
+                                type: "button",
+                                onClick: retryFailedMessage,
+                                disabled: sending
+                            },
+                            sending ? "再送中" : "同じ質問を再送"
+                        )
+                        : null
+                )
+                : null,
             h(
                 "section",
                 { className: "study-chat-log" },
@@ -3143,7 +3194,7 @@
                         },
                         previewingTextbook ? h(LoadingLabel, { text: "作成中" }) : "教科書にする"
                     ),
-                    lessonActions.map(function (action) {
+                    primaryLessonActions.map(function (action) {
                         return h(
                             "button",
                             {
@@ -3156,7 +3207,30 @@
                             },
                             action.label
                         );
-                    })
+                    }),
+                    h(
+                        "details",
+                        { className: "lesson-more-actions" },
+                        h("summary", null, "その他"),
+                        h(
+                            "div",
+                            { className: "lesson-more-panel" },
+                            secondaryLessonActions.map(function (action) {
+                                return h(
+                                    "button",
+                                    {
+                                        key: action.label,
+                                        type: "button",
+                                        onClick: function () {
+                                            sendLessonAction(action);
+                                        },
+                                        disabled: sending || !chatData
+                                    },
+                                    action.label
+                                );
+                            })
+                        )
+                    )
                 ),
                 h(
                     "form",

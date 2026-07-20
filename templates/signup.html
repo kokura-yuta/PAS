@@ -3,34 +3,35 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PAS Sign Up</title>
+    <title>新規登録 | Study PAS</title>
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="theme-{{ settings.theme_name }}">
     <main class="auth-page">
         <section class="auth-panel">
-            <p class="eyebrow">Personal AI System</p>
+            <p class="eyebrow">Study PAS</p>
             <h1>新規登録</h1>
-            <p class="lead">PASがあなた専用の記憶を持てるようにします。</p>
+            <p class="lead">あなたに合わせて教え方が育つ先生を始めます。</p>
 
             {% if error %}
-                <p class="form-error">{{ error }}</p>
+                <p class="form-error" role="alert">{{ error }}</p>
             {% endif %}
 
             <form method="post" action="/signup">
                 <div class="field">
-                    <label>名前</label>
-                    <input type="text" name="name" value="{{ name }}" autocomplete="name" required>
+                    <label for="signup-name">名前</label>
+                    <input id="signup-name" type="text" name="name" value="{{ name }}" autocomplete="name" maxlength="100" required>
                 </div>
 
                 <div class="field">
-                    <label>メールアドレス</label>
-                    <input type="email" name="email" value="{{ email }}" autocomplete="email" required>
+                    <label for="signup-email">メールアドレス</label>
+                    <input id="signup-email" type="email" name="email" value="{{ email }}" autocomplete="email" maxlength="255" required>
                 </div>
 
                 <div class="field">
-                    <label>パスワード</label>
-                    <input type="password" name="password" autocomplete="new-password" minlength="8" required>
+                    <label for="signup-password">パスワード</label>
+                    <input id="signup-password" type="password" name="password" autocomplete="new-password" minlength="8" aria-describedby="password-hint" required>
+                    <p id="password-hint" class="field-hint">8文字以上で設定してください。</p>
                 </div>
 
                 <button type="submit">登録する</button>
@@ -39,6 +40,7 @@
             <p class="auth-switch">
                 すでにアカウントがある場合は <a href="/login">ログイン</a>
             </p>
+            <p class="auth-switch subtle-auth-link">登録前に<a href="/privacy">プライバシーと利用上の注意</a>をご確認ください。</p>
         </section>
     </main>
 </body>
