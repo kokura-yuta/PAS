@@ -2,34 +2,41 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>プライバシーと利用上の注意 | Study PAS</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f6f3">
+    <title>プライバシーポリシー | Study PAS</title>
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
     <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
 </head>
 <body class="study-static-body">
-    <main class="study-static-page">
+    <main class="study-static-page legal-page">
         <header class="study-static-header">
-            <a href="/settings" aria-label="設定へ戻る">戻る</a>
-            <div>
-                <span>Study PAS</span>
-                <h1>データの扱い</h1>
-            </div>
+            <a href="/consent">戻る</a>
+            <div><span>Study PAS</span><h1>プライバシーポリシー</h1></div>
             <span aria-hidden="true"></span>
         </header>
 
         <section class="study-static-intro">
             <p class="section-kicker">Privacy</p>
-            <h2>安心して先生を育てるために</h2>
-            <p>Study PASが保存・送信する情報と、自分で管理できる範囲を説明します。</p>
+            <h2>学習データを、必要な範囲で扱います</h2>
+            <p>バージョン {{ privacy_version }} ／ 発効日 {{ effective_date }}</p>
         </section>
 
-        <div class="study-policy-list">
-            <article><span>01</span><div><h2>保存する情報</h2><p>アカウント情報、チャット、学習状況、教材、ロードマップ、学習支援に必要なMemoryを保存します。</p></div></article>
-            <article><span>02</span><div><h2>AIへの送信</h2><p>回答生成のため、入力した文章・画像・関連する会話履歴や学習情報をOpenAI APIへ送信します。パスワードは送信しません。</p></div></article>
-            <article><span>03</span><div><h2>AI回答について</h2><p>回答には誤りが含まれる可能性があります。試験要項や提出条件などは、必ず公式情報でも確認してください。</p></div></article>
-            <article><span>04</span><div><h2>取得と削除</h2><p>設定から保存データを書き出せます。パスワード確認後、アカウントと関連データをすべて削除できます。</p></div></article>
-            <article><span>05</span><div><h2>利用制限</h2><p>安定運用と料金保護のため、送信回数や入力サイズに上限があります。</p></div></article>
+        <div class="legal-document">
+            <section><h2>1. 取得する情報</h2><p>氏名、メールアドレス、認証情報のハッシュ、チャット、画像、教材、ロードマップ、理解度、学習日時、Memory、端末・ブラウザ情報、アクセスログ、決済顧客ID・契約状態を取得します。カード番号等の決済情報はStripeが処理し、本サービスでは保存しません。</p></section>
+            <section><h2>2. 利用目的</h2><p>本人確認、学習支援、AI回答生成、学習履歴・Memoryの提供、課金・契約管理、問い合わせ対応、不正利用防止、障害対応、品質・安全性の改善、法令上必要な対応に利用します。</p></section>
+            <section><h2>3. AI処理と外部委託</h2><p>回答生成のため、入力した文章・画像・関連する会話履歴や学習情報をOpenAI APIへ送信します。また、決済にStripe、ホスティング・データ保存にRender等の委託先を利用します。これらの事業者が国外でデータを処理する場合があります。</p></section>
+            <section><h2>4. 第三者提供</h2><p>本人の同意がある場合、法令に基づく場合、生命・身体・財産の保護に必要な場合等を除き、個人データを第三者へ提供しません。サービス提供に必要な委託は、法令に従って管理します。</p></section>
+            <section><h2>5. Cookie等</h2><p>ログイン状態、安全なセッション、設定保持、不正利用防止のためCookieを使用します。必須Cookieを無効にすると本サービスを利用できない場合があります。</p></section>
+            <section><h2>6. 保存期間と削除</h2><p>サービス提供に必要な期間または法令上必要な期間保存します。設定からデータを書き出し、アカウントと関連データを削除できます。バックアップや法令対応記録は、合理的な期間残る場合があります。</p></section>
+            <section><h2>7. 安全管理</h2><p>アクセス制御、パスワードのハッシュ化、通信の暗号化、入力・送信制限、ログ監視等の合理的な安全管理措置を講じます。ただし、インターネット上の安全性を完全に保証するものではありません。</p></section>
+            <section><h2>8. 開示等の請求</h2><p>本人は、法令に基づき、保有個人データの利用目的の通知、開示、訂正、利用停止、消去等を請求できます。本人確認後、法令に従って対応します。</p></section>
+            <section><h2>9. 未成年者</h2><p>18歳未満の方は、法定代理人の同意を得て利用してください。法定代理人から適法な請求があった場合、本人確認の上で対応します。</p></section>
+            <section><h2>10. 改定・お問い合わせ</h2><p>重要な改定時は内容と発効日を表示し、必要に応じて再同意を求めます。お問い合わせ先と個人情報管理責任者は<a href="/commerce-disclosure">特定商取引法に基づく表示</a>に記載します。</p></section>
         </div>
     </main>
+    <script src="/static/pwa-register.js?v={{ asset_version }}" defer></script>
 </body>
 </html>

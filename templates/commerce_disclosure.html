@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f6f3">
+    <title>特定商取引法に基づく表示 | Study PAS</title>
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+</head>
+<body class="study-static-body">
+    <main class="study-static-page legal-page">
+        <header class="study-static-header">
+            <a href="/consent">戻る</a>
+            <div><span>Study PAS</span><h1>特定商取引法に基づく表示</h1></div>
+            <span aria-hidden="true"></span>
+        </header>
+
+        {% if not legal_configured %}
+        <p class="legal-config-warning" role="alert">運営者情報が未設定です。公開課金は自動的に無効化されています。</p>
+        {% endif %}
+
+        <dl class="commerce-table">
+            <div><dt>販売事業者</dt><dd>{{ legal.business_name or '【公開前にLEGAL_BUSINESS_NAMEを設定】' }}</dd></div>
+            <div><dt>運営責任者</dt><dd>{{ legal.representative or '【公開前にLEGAL_REPRESENTATIVEを設定】' }}</dd></div>
+            <div><dt>所在地</dt><dd>{{ legal.address or '【公開前にLEGAL_ADDRESSを設定】' }}</dd></div>
+            <div><dt>電話番号</dt><dd>{{ legal.phone or '【公開前にLEGAL_PHONEを設定】' }}</dd></div>
+            <div><dt>メールアドレス</dt><dd>{{ legal.email or '【公開前にLEGAL_EMAILを設定】' }}</dd></div>
+            <div><dt>販売価格</dt><dd>Study PAS Premium 月額800円（利用者が支払う総額）</dd></div>
+            <div><dt>商品代金以外の必要料金</dt><dd>インターネット接続料金および通信料金は利用者の負担です。</dd></div>
+            <div><dt>支払方法</dt><dd>Stripeが提供する決済画面で利用可能なクレジットカード等。</dd></div>
+            <div><dt>支払時期</dt><dd>申込時に初回決済を行い、その後は解約されるまで申込日を基準として毎月自動決済します。</dd></div>
+            <div><dt>サービス提供時期</dt><dd>決済完了後、Premium機能を利用できます。反映に短時間かかる場合があります。</dd></div>
+            <div><dt>提供内容</dt><dd>AI教科書およびAIロードマップの作成数上限を解除します。</dd></div>
+            <div><dt>契約期間・自動更新</dt><dd>1か月単位の自動更新です。最低利用期間はありません。</dd></div>
+            <div><dt>解約方法</dt><dd>Premium画面の「請求・解約を管理」から手続きできます。次回更新日前に解約すると、次回以降の請求は行われません。支払済み期間中の利用可否は解約画面の表示に従います。</dd></div>
+            <div><dt>返金・キャンセル</dt><dd>デジタルサービスの性質上、提供開始後の利用者都合による返金は原則として行いません。ただし、法令上必要な場合、重複請求・誤請求、または運営者の責めに帰すべき事由により提供できなかった場合は個別に対応します。</dd></div>
+            <div><dt>動作環境</dt><dd>最新の主要ブラウザまたはホーム画面へ追加したPWA。通信環境が必要です。</dd></div>
+        </dl>
+    </main>
+    <script src="/static/pwa-register.js?v={{ asset_version }}" defer></script>
+</body>
+</html>

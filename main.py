@@ -1,9 +1,10 @@
 from fastapi import FastAPI, Request, Form, File, UploadFile
-from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, JSONResponse, StreamingResponse, FileResponse
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from openai import OpenAI
+import stripe
 from dotenv import load_dotenv
 from pydantic import BaseModel
 import os
@@ -75,9 +76,26 @@ DIARY_THREAD_TYPE = "diary"
 CUSTOM_THREAD_TYPE = "custom"
 WORK_THREAD_TYPE = "work"
 STUDY_THREAD_TYPE = "study"
-ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "ux-20260719b")[:12]
+ASSET_VERSION = (os.getenv("RENDER_GIT_COMMIT") or "legal-pwa-20260720a")[:16]
 REMEMBER_COOKIE_NAME = "pas_remember_login"
 REMEMBER_LOGIN_DAYS = 30
+FREE_PLAN = "free"
+PREMIUM_PLAN = "premium"
+FREE_TEXTBOOK_LIMIT = 3
+FREE_ROADMAP_LIMIT = 3
+PREMIUM_MONTHLY_PRICE_YEN = 800
+PREMIUM_ACCESS_SUBSCRIPTION_STATUSES = {"active", "trialing", "past_due"}
+INACTIVE_SUBSCRIPTION_STATUSES = {
+    "canceled",
+    "incomplete_expired",
+    "unpaid",
+    "paused"
+}
+TERMS_VERSION = os.getenv("TERMS_VERSION", "2026-07-20")
+PRIVACY_VERSION = os.getenv("PRIVACY_VERSION", "2026-07-20")
+TERMS_EFFECTIVE_DATE = os.getenv("TERMS_EFFECTIVE_DATE", "2026年7月20日")
+PRE_AUTH_CONSENT_SESSION_KEY = "pre_auth_consent_version"
+PRE_AUTH_CONSENT_AT_SESSION_KEY = "pre_auth_consent_at"
 FITNESS_THREAD_TYPE = "fitness"
 MENTAL_THREAD_TYPE = "mental"
 FINANCE_THREAD_TYPE = "finance"
@@ -457,7 +475,28 @@ class User(Base):
     name = Column(String(100))
     email = Column(String(255), unique=True, index=True)
     password_hash = Column(Text)
+    subscription_plan = Column(String(30), default=FREE_PLAN)
+    stripe_customer_id = Column(String(255), index=True)
+    stripe_subscription_id = Column(String(255), index=True)
+    subscription_status = Column(String(50), default="inactive")
+    stripe_subscription_event_created_at = Column(Integer, default=0)
+    terms_version = Column(String(50))
+    privacy_version = Column(String(50))
+    terms_accepted_at = Column(DateTime)
     created_at = Column(DateTime, default=app_now)
+
+
+class ConsentRecord(Base):
+    __tablename__ = "consent_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, index=True)
+    terms_version = Column(String(50))
+    privacy_version = Column(String(50))
+    ai_notice_accepted = Column(Boolean, default=True)
+    age_confirmed = Column(Boolean, default=True)
+    acceptance_source = Column(String(30))
+    accepted_at = Column(DateTime, default=app_now)
 
 
 class PasswordResetToken(Base):
@@ -762,6 +801,57 @@ def ensure_chat_message_thread_id_column():
 
 ensure_chat_message_thread_id_column()
 
+
+def ensure_user_subscription_columns():
+    ensure_columns(
+        "users",
+        {
+            "subscription_plan": "VARCHAR(30) DEFAULT 'free'",
+            "stripe_customer_id": "VARCHAR(255)",
+            "stripe_subscription_id": "VARCHAR(255)",
+            "subscription_status": "VARCHAR(50) DEFAULT 'inactive'",
+            "stripe_subscription_event_created_at": "INTEGER DEFAULT 0",
+            "terms_version": "VARCHAR(50)",
+            "privacy_version": "VARCHAR(50)",
+            "terms_accepted_at": "TIMESTAMP"
+        }
+    )
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE users SET subscription_plan = 'free' "
+                "WHERE subscription_plan IS NULL OR subscription_plan = ''"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE users SET subscription_status = 'inactive' "
+                "WHERE subscription_status IS NULL OR subscription_status = ''"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE users SET stripe_subscription_event_created_at = 0 "
+                "WHERE stripe_subscription_event_created_at IS NULL"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_users_stripe_customer_id "
+                "ON users (stripe_customer_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_users_stripe_subscription_id "
+                "ON users (stripe_subscription_id)"
+            )
+        )
+
+
+ensure_user_subscription_columns()
+
 def ensure_chat_thread_study_columns():
     ensure_columns(
         "chat_threads",
@@ -952,7 +1042,8 @@ def create_user(name, email, password):
         user = User(
             name=clean_name,
             email=clean_email,
-            password_hash=hash_password(password)
+            password_hash=hash_password(password),
+            subscription_plan=FREE_PLAN
         )
 
         db.add(user)
@@ -1259,7 +1350,13 @@ def send_password_reset_email(email, reset_url):
     smtp_port = int(os.getenv("SMTP_PORT", "587"))
     smtp_username = (os.getenv("SMTP_USERNAME") or "").strip()
     smtp_password = (os.getenv("SMTP_PASSWORD") or "").strip()
-    smtp_from = (os.getenv("SMTP_FROM") or os.getenv("EMAIL_FROM") or smtp_username or "").strip()
+    smtp_from = (
+        os.getenv("SMTP_FROM_EMAIL")
+        or os.getenv("SMTP_FROM")
+        or os.getenv("EMAIL_FROM")
+        or smtp_username
+        or ""
+    ).strip()
 
     if not smtp_host or not smtp_from:
         return False
@@ -1299,12 +1396,105 @@ def load_user(user_id):
         db.close()
 
 
+def user_has_current_terms(user):
+    return bool(
+        user
+        and user.terms_version == TERMS_VERSION
+        and user.privacy_version == PRIVACY_VERSION
+        and user.terms_accepted_at is not None
+    )
+
+
+def current_consent_version_key():
+    return f"{TERMS_VERSION}|{PRIVACY_VERSION}"
+
+
+def session_has_current_consent(request):
+    return request.session.get(PRE_AUTH_CONSENT_SESSION_KEY) == current_consent_version_key()
+
+
+def remember_session_consent(request):
+    accepted_at = app_now()
+    request.session[PRE_AUTH_CONSENT_SESSION_KEY] = current_consent_version_key()
+    request.session[PRE_AUTH_CONSENT_AT_SESSION_KEY] = accepted_at.isoformat()
+    return accepted_at
+
+
+def session_consent_accepted_at(request):
+    raw_value = request.session.get(PRE_AUTH_CONSENT_AT_SESSION_KEY)
+    if not raw_value:
+        return app_now()
+    try:
+        return datetime.fromisoformat(raw_value)
+    except (TypeError, ValueError):
+        return app_now()
+
+
+def record_user_terms_acceptance(user_id, accepted_at=None, source="login"):
+    if user_id is None:
+        return False
+
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).first()
+        if user is None:
+            return False
+        user.terms_version = TERMS_VERSION
+        user.privacy_version = PRIVACY_VERSION
+        user.terms_accepted_at = accepted_at or app_now()
+
+        existing_record = (
+            db.query(ConsentRecord)
+            .filter(ConsentRecord.user_id == user_id)
+            .filter(ConsentRecord.terms_version == TERMS_VERSION)
+            .filter(ConsentRecord.privacy_version == PRIVACY_VERSION)
+            .first()
+        )
+        if existing_record is None:
+            db.add(ConsentRecord(
+                user_id=user_id,
+                terms_version=TERMS_VERSION,
+                privacy_version=PRIVACY_VERSION,
+                ai_notice_accepted=True,
+                age_confirmed=True,
+                acceptance_source=source,
+                accepted_at=user.terms_accepted_at
+            ))
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def safe_consent_next_path(next_path, default="/login"):
+    clean_path = (next_path or "").strip()
+    if (
+        not clean_path.startswith("/")
+        or clean_path.startswith("//")
+        or "\n" in clean_path
+        or "\r" in clean_path
+    ):
+        return default
+    parsed = urlparse(clean_path)
+    if parsed.scheme or parsed.netloc:
+        return default
+    return clean_path
+
+
+def consent_redirect(next_path="/login"):
+    safe_next = safe_consent_next_path(next_path)
+    return RedirectResponse(
+        url=f"/consent?next={quote(safe_next)}",
+        status_code=303
+    )
+
+
 def get_current_user(request):
     user_id = request.session.get("user_id")
     user = load_user(user_id)
 
     if user:
-        return user
+        return user if user_has_current_terms(user) else None
 
     remembered_user = load_user_from_remember_token(
         request.cookies.get(REMEMBER_COOKIE_NAME)
@@ -1312,7 +1502,7 @@ def get_current_user(request):
 
     if remembered_user:
         login_user(request, remembered_user.id)
-        return remembered_user
+        return remembered_user if user_has_current_terms(remembered_user) else None
 
     return None
 
@@ -1359,6 +1549,10 @@ def export_user_data(user):
             "id": user.id,
             "name": user.name,
             "email": user.email,
+            "subscription_plan": normalize_subscription_plan(user.subscription_plan),
+            "terms_version": user.terms_version,
+            "privacy_version": user.privacy_version,
+            "terms_accepted_at": serialize_export_value(user.terms_accepted_at),
             "created_at": serialize_export_value(user.created_at)
         },
         "data": {}
@@ -1463,6 +1657,353 @@ def normalize_subject_title(title):
         return ""
 
     return truncate_text(clean_title, THREAD_TITLE_MAX_LENGTH)
+
+
+class PlanLimitReached(Exception):
+    def __init__(self, asset_type, usage):
+        super().__init__(asset_type)
+        self.asset_type = asset_type
+        self.usage = usage
+
+
+def normalize_subscription_plan(plan_name):
+    return PREMIUM_PLAN if (plan_name or "").strip().lower() == PREMIUM_PLAN else FREE_PLAN
+
+
+def count_user_textbooks(db, user_id):
+    return (
+        db.query(StudyTextbook)
+        .filter(StudyTextbook.user_id == user_id)
+        .count()
+    )
+
+
+def count_user_roadmaps(db, user_id):
+    subjects = (
+        db.query(StudyRoadmapItem.subject)
+        .filter(StudyRoadmapItem.user_id == user_id)
+        .distinct()
+        .all()
+    )
+    return len({
+        normalize_subject_title(subject) or "学習相談"
+        for subject, in subjects
+    })
+
+
+def build_asset_usage(used, limit, is_premium):
+    unlimited = bool(is_premium)
+    return {
+        "used": used,
+        "limit": None if unlimited else limit,
+        "remaining": None if unlimited else max(0, limit - used),
+        "unlimited": unlimited,
+        "reached": False if unlimited else used >= limit
+    }
+
+
+def load_plan_usage(user_id, db=None, lock_user=False):
+    own_db = db is None
+    db = db or SessionLocal()
+
+    try:
+        user_query = db.query(User).filter(User.id == user_id)
+        if lock_user:
+            user_query = user_query.with_for_update()
+        user = user_query.first()
+        plan_name = normalize_subscription_plan(
+            user.subscription_plan if user else FREE_PLAN
+        )
+        is_premium = plan_name == PREMIUM_PLAN
+
+        return {
+            "plan": plan_name,
+            "plan_label": "Premium" if is_premium else "Free",
+            "is_premium": is_premium,
+            "monthly_price_yen": 800 if is_premium else 0,
+            "textbooks": build_asset_usage(
+                count_user_textbooks(db, user_id),
+                FREE_TEXTBOOK_LIMIT,
+                is_premium
+            ),
+            "roadmaps": build_asset_usage(
+                count_user_roadmaps(db, user_id),
+                FREE_ROADMAP_LIMIT,
+                is_premium
+            )
+        }
+    finally:
+        if own_db:
+            db.close()
+
+
+def stripe_billing_configured():
+    return all(
+        (os.getenv(name) or "").strip()
+        for name in (
+            "STRIPE_SECRET_KEY",
+            "STRIPE_WEBHOOK_SECRET",
+            "STRIPE_PREMIUM_PRICE_ID"
+        )
+    )
+
+
+def legal_commerce_details():
+    return {
+        "business_name": (os.getenv("LEGAL_BUSINESS_NAME") or "").strip(),
+        "representative": (os.getenv("LEGAL_REPRESENTATIVE") or "").strip(),
+        "address": (os.getenv("LEGAL_ADDRESS") or "").strip(),
+        "phone": (os.getenv("LEGAL_PHONE") or "").strip(),
+        "email": (os.getenv("LEGAL_EMAIL") or "").strip()
+    }
+
+
+def legal_commerce_configured():
+    return all(legal_commerce_details().values())
+
+
+def premium_checkout_configured():
+    return stripe_billing_configured() and legal_commerce_configured()
+
+
+def get_stripe_client():
+    secret_key = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if not secret_key:
+        return None
+    return stripe.StripeClient(secret_key, max_network_retries=2)
+
+
+def stripe_field(resource, key, default=None):
+    if resource is None:
+        return default
+    if isinstance(resource, dict):
+        return resource.get(key, default)
+    return getattr(resource, key, default)
+
+
+def stripe_resource_id(resource):
+    if isinstance(resource, str):
+        return resource
+    return stripe_field(resource, "id", "") or ""
+
+
+def parse_positive_int(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def stripe_metadata_user_id(resource):
+    metadata = stripe_field(resource, "metadata", {}) or {}
+    return parse_positive_int(stripe_field(metadata, "user_id"))
+
+
+def checkout_session_user_id(session):
+    return (
+        parse_positive_int(stripe_field(session, "client_reference_id"))
+        or stripe_metadata_user_id(session)
+    )
+
+
+def normalize_subscription_status(status):
+    clean_status = (status or "inactive").strip().lower()
+    return clean_status if clean_status else "inactive"
+
+
+def plan_for_subscription_status(status):
+    return (
+        PREMIUM_PLAN
+        if normalize_subscription_status(status) in PREMIUM_ACCESS_SUBSCRIPTION_STATUSES
+        else FREE_PLAN
+    )
+
+
+def update_user_billing_state(
+    user_id,
+    customer_id="",
+    subscription_id="",
+    status="inactive",
+    event_created_at=None
+):
+    db = SessionLocal()
+    try:
+        user = db.query(User).filter(User.id == user_id).with_for_update().first()
+        if user is None:
+            return False
+
+        incoming_event_created_at = parse_positive_int(event_created_at) or 0
+        saved_event_created_at = user.stripe_subscription_event_created_at or 0
+        if incoming_event_created_at and incoming_event_created_at < saved_event_created_at:
+            return False
+
+        clean_status = normalize_subscription_status(status)
+        clean_customer_id = stripe_resource_id(customer_id)
+        clean_subscription_id = stripe_resource_id(subscription_id)
+
+        if (
+            clean_subscription_id
+            and user.stripe_subscription_id
+            and clean_subscription_id != user.stripe_subscription_id
+            and clean_status not in PREMIUM_ACCESS_SUBSCRIPTION_STATUSES
+        ):
+            return False
+
+        if clean_customer_id:
+            user.stripe_customer_id = clean_customer_id
+        if clean_subscription_id:
+            user.stripe_subscription_id = clean_subscription_id
+        user.subscription_status = clean_status
+        user.subscription_plan = plan_for_subscription_status(clean_status)
+        if incoming_event_created_at:
+            user.stripe_subscription_event_created_at = incoming_event_created_at
+        db.commit()
+        return True
+    finally:
+        db.close()
+
+
+def find_user_for_subscription(subscription):
+    subscription_id = stripe_resource_id(subscription)
+    customer_id = stripe_resource_id(stripe_field(subscription, "customer"))
+    metadata_user_id = stripe_metadata_user_id(subscription)
+
+    db = SessionLocal()
+    try:
+        user = None
+        if subscription_id:
+            user = (
+                db.query(User)
+                .filter(User.stripe_subscription_id == subscription_id)
+                .first()
+            )
+        if user is None and customer_id:
+            user = (
+                db.query(User)
+                .filter(User.stripe_customer_id == customer_id)
+                .first()
+            )
+        if user is None and metadata_user_id:
+            user = db.query(User).filter(User.id == metadata_user_id).first()
+        return user.id if user else None
+    finally:
+        db.close()
+
+
+def sync_subscription_from_stripe(subscription, event_created_at=None, expected_user_id=None):
+    user_id = find_user_for_subscription(subscription)
+    if expected_user_id is not None and user_id != expected_user_id:
+        return False
+    if user_id is None:
+        return False
+
+    return update_user_billing_state(
+        user_id=user_id,
+        customer_id=stripe_field(subscription, "customer"),
+        subscription_id=stripe_resource_id(subscription),
+        status=stripe_field(subscription, "status", "inactive"),
+        event_created_at=event_created_at
+    )
+
+
+def sync_checkout_session_from_stripe(session, event_created_at=None, expected_user_id=None):
+    user_id = checkout_session_user_id(session)
+    if expected_user_id is not None and user_id != expected_user_id:
+        return False
+    if user_id is None:
+        return False
+
+    checkout_status = (stripe_field(session, "status", "") or "").lower()
+    payment_status = (stripe_field(session, "payment_status", "") or "").lower()
+    if checkout_status != "complete" or payment_status not in {"paid", "no_payment_required"}:
+        return False
+
+    return update_user_billing_state(
+        user_id=user_id,
+        customer_id=stripe_field(session, "customer"),
+        subscription_id=stripe_field(session, "subscription"),
+        status="active",
+        event_created_at=event_created_at
+    )
+
+
+def validate_premium_price(price):
+    recurring = stripe_field(price, "recurring", {}) or {}
+    return all((
+        stripe_field(price, "active") is True,
+        stripe_field(price, "currency", "").lower() == "jpy",
+        stripe_field(price, "unit_amount") == PREMIUM_MONTHLY_PRICE_YEN,
+        stripe_field(recurring, "interval", "").lower() == "month",
+        stripe_field(recurring, "interval_count", 1) == 1
+    ))
+
+
+def billing_status_payload(user_id):
+    user = load_user(user_id)
+    status = normalize_subscription_status(
+        user.subscription_status if user else "inactive"
+    )
+    return {
+        "billing_configured": premium_checkout_configured(),
+        "stripe_configured": stripe_billing_configured(),
+        "legal_disclosure_configured": legal_commerce_configured(),
+        "subscription_status": status,
+        "can_manage_billing": bool(
+            stripe_billing_configured()
+            and user
+            and user.stripe_customer_id
+        ),
+        "plan_usage": load_plan_usage(user_id)
+    }
+
+
+def cancel_user_stripe_subscription(user):
+    if user is None or not user.stripe_subscription_id:
+        return True
+    if normalize_subscription_status(user.subscription_status) in INACTIVE_SUBSCRIPTION_STATUSES:
+        return True
+    if not stripe_billing_configured():
+        return False
+
+    try:
+        client = get_stripe_client()
+        subscription = client.v1.subscriptions.cancel(user.stripe_subscription_id)
+        sync_subscription_from_stripe(subscription, expected_user_id=user.id)
+        return True
+    except stripe.StripeError:
+        logger.exception("stripe_subscription_cancel_failed user_id=%s", user.id)
+        return False
+
+
+def plan_limit_error_response(asset_type, usage=None):
+    usage = usage or {}
+    label = "教科書" if asset_type == "textbooks" else "ロードマップ"
+    message = f"無料プランでは{label}は3つまでです。"
+    if asset_type == "textbooks":
+        message = "無料プランでは教科書は3冊までです。"
+
+    return JSONResponse(
+        {
+            "error": f"{asset_type.rstrip('s')}_limit_reached",
+            "asset_type": asset_type,
+            "message": message,
+            "plan_usage": usage
+        },
+        status_code=403
+    )
+
+
+def roadmap_creation_limit_response(thread, user_id, clean_message):
+    if not should_create_roadmap_from_message(clean_message, thread.title):
+        return None
+    if has_active_roadmap_for_thread(thread):
+        return None
+
+    usage = load_plan_usage(user_id)
+    if not usage["roadmaps"]["reached"]:
+        return None
+    return plan_limit_error_response("roadmaps", usage)
 
 
 def get_or_create_default_study_thread(user_id):
@@ -2430,6 +2971,55 @@ def load_textbook(textbook_id, user_id):
         db.close()
 
 
+def delete_study_textbook(textbook_id, user_id):
+    db = SessionLocal()
+
+    try:
+        textbook = (
+            db.query(StudyTextbook)
+            .filter(StudyTextbook.id == textbook_id)
+            .filter(StudyTextbook.user_id == user_id)
+            .first()
+        )
+
+        if textbook is None:
+            return None
+
+        title = textbook.title or "教科書"
+        subject = textbook.subject or "学習相談"
+        db.query(StudyTextbookUpdate).filter(
+            StudyTextbookUpdate.user_id == user_id,
+            StudyTextbookUpdate.textbook_id == textbook.id
+        ).delete(synchronize_session=False)
+        db.query(StudyAssessment).filter(
+            StudyAssessment.user_id == user_id,
+            StudyAssessment.textbook_id == textbook.id
+        ).delete(synchronize_session=False)
+        db.query(StudyUnderstanding).filter(
+            StudyUnderstanding.user_id == user_id,
+            StudyUnderstanding.textbook_id == textbook.id
+        ).delete(synchronize_session=False)
+        deactivated_memories = (
+            db.query(Memory)
+            .filter(Memory.user_id == user_id)
+            .filter(Memory.category.in_(["textbook_asset", "roadmap_context"]))
+            .filter(Memory.content.contains(f"「{title}」"))
+            .update({"is_active": False}, synchronize_session=False)
+        )
+        db.delete(textbook)
+        db.commit()
+
+        return {
+            "id": textbook_id,
+            "title": title,
+            "subject": subject,
+            "deactivated_memories": deactivated_memories,
+            "plan_usage": load_plan_usage(user_id, db=db)
+        }
+    finally:
+        db.close()
+
+
 def load_bookshelves(user_id):
     db = SessionLocal()
 
@@ -2978,6 +3568,10 @@ def load_or_create_roadmap(
 
     if not existing_items:
         if not allow_create:
+            return []
+
+        plan_usage = load_plan_usage(user_id, db=db, lock_user=True)
+        if plan_usage["roadmaps"]["reached"]:
             return []
 
         roadmap_goal_text = extract_roadmap_goal_text(goal_text, subject)
@@ -4334,6 +4928,10 @@ def confirm_textbook_preview(payload, user_id):
             textbook.updated_at = app_now()
             action_type = "updated"
         else:
+            plan_usage = load_plan_usage(user_id, db=db, lock_user=True)
+            if plan_usage["textbooks"]["reached"]:
+                raise PlanLimitReached("textbooks", plan_usage)
+
             textbook = StudyTextbook(
                 user_id=user_id,
                 thread_id=thread.id,
@@ -7784,6 +8382,8 @@ def request_client_key(request):
 def is_cross_site_write(request):
     if request.method not in {"POST", "PUT", "PATCH", "DELETE"}:
         return False
+    if request.url.path == "/api/billing/webhook":
+        return False
 
     source = request.headers.get("origin") or request.headers.get("referer")
     if not source:
@@ -7801,6 +8401,8 @@ def rate_limit_policy(request):
     path = request.url.path
     if path in {"/login", "/signup", "/forgot-password", "/reset-password"}:
         return 10, 15 * 60
+    if path in {"/api/billing/checkout", "/api/billing/portal"}:
+        return 10, 60
     if path.endswith("/image"):
         return 12, 60
     if "/messages" in path or path.endswith("/textbook_preview"):
@@ -7888,6 +8490,17 @@ def health_check():
         return JSONResponse({"status": "unavailable", "database": "error"}, status_code=503)
 
 
+@app.get("/service-worker.js", include_in_schema=False)
+def service_worker():
+    response = FileResponse(
+        "static/service-worker.js",
+        media_type="application/javascript"
+    )
+    response.headers["Service-Worker-Allowed"] = "/"
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    return response
+
+
 def render_react_app(request, current_user):
     settings = load_settings(current_user.id)
 
@@ -7905,8 +8518,74 @@ def render_react_app(request, current_user):
     return response
 
 
+@app.get("/consent")
+def consent_page(request: Request, next: str = "/login"):
+    safe_next = safe_consent_next_path(next)
+    raw_user = load_user(request.session.get("user_id"))
+    if user_has_current_terms(raw_user):
+        return RedirectResponse(url=safe_next, status_code=303)
+
+    return templates.TemplateResponse(
+        request=request,
+        name="consent.html",
+        context={
+            "error": "",
+            "next_path": safe_next,
+            "terms_version": TERMS_VERSION,
+            "privacy_version": PRIVACY_VERSION,
+            "effective_date": TERMS_EFFECTIVE_DATE,
+            "asset_version": ASSET_VERSION
+        }
+    )
+
+
+@app.post("/consent")
+def consent_accept(
+    request: Request,
+    next: str = Form("/login"),
+    accept_terms: str = Form(""),
+    accept_ai_notice: str = Form(""),
+    accept_age: str = Form("")
+):
+    safe_next = safe_consent_next_path(next)
+    if not all((
+        accept_terms == "on",
+        accept_ai_notice == "on",
+        accept_age == "on"
+    )):
+        return templates.TemplateResponse(
+            request=request,
+            name="consent.html",
+            context={
+                "error": "3つの項目を確認し、すべてに同意してください。",
+                "next_path": safe_next,
+                "terms_version": TERMS_VERSION,
+                "privacy_version": PRIVACY_VERSION,
+                "effective_date": TERMS_EFFECTIVE_DATE,
+                "asset_version": ASSET_VERSION
+            },
+            status_code=400
+        )
+
+    accepted_at = remember_session_consent(request)
+    raw_user = load_user(request.session.get("user_id"))
+    if raw_user:
+        record_user_terms_acceptance(
+            raw_user.id,
+            accepted_at=accepted_at,
+            source="reconsent"
+        )
+    return RedirectResponse(url=safe_next, status_code=303)
+
+
 @app.get("/signup")
 def signup_page(request: Request):
+    current_user = get_current_user(request)
+    if current_user:
+        return RedirectResponse(url="/", status_code=303)
+    if not session_has_current_consent(request):
+        return consent_redirect("/signup")
+
     return templates.TemplateResponse(
         request=request,
         name="signup.html",
@@ -7926,6 +8605,9 @@ def signup_action(
     email: str = Form(""),
     password: str = Form("")
 ):
+    if not session_has_current_consent(request):
+        return consent_redirect("/signup")
+
     user = create_user(name, email, password)
 
     if user is None:
@@ -7940,6 +8622,11 @@ def signup_action(
             }
         )
 
+    record_user_terms_acceptance(
+        user.id,
+        accepted_at=session_consent_accepted_at(request),
+        source="signup"
+    )
     login_user(request, user.id)
     return RedirectResponse(url="/", status_code=303)
 
@@ -7950,6 +8637,8 @@ def login_page(request: Request):
 
     if current_user:
         return RedirectResponse(url="/", status_code=303)
+    if not session_has_current_consent(request):
+        return consent_redirect("/login")
 
     return templates.TemplateResponse(
         request=request,
@@ -7970,6 +8659,9 @@ def login_action(
     password: str = Form(""),
     remember_login: str = Form("")
 ):
+    if not session_has_current_consent(request):
+        return consent_redirect("/login")
+
     user = authenticate_user(email, password)
 
     if user is None:
@@ -7984,6 +8676,11 @@ def login_action(
             }
         )
 
+    record_user_terms_acceptance(
+        user.id,
+        accepted_at=session_consent_accepted_at(request),
+        source="login"
+    )
     login_user(request, user.id)
     response = RedirectResponse(url="/", status_code=303)
 
@@ -8137,11 +8834,198 @@ def api_home(request: Request):
         "settings": {
             "response_length": settings.response_length
         },
+        "plan_usage": load_plan_usage(current_user.id),
         "study_threads": study_threads,
         "next_study_thread": active_threads[0] if active_threads else (study_threads[0] if study_threads else None),
         "recent_study_history": load_recent_study_history(current_user.id),
         "memory_highlights": load_study_memory_highlights(current_user.id)
     }
+
+
+@app.get("/api/billing/status")
+def api_billing_status(request: Request, checkout_session_id: str = ""):
+    current_user = get_current_user(request)
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    clean_session_id = (checkout_session_id or "").strip()
+    if clean_session_id:
+        if (
+            not clean_session_id.startswith("cs_")
+            or len(clean_session_id) > 255
+            or not stripe_billing_configured()
+        ):
+            return JSONResponse(
+                {"error": "invalid_checkout_session", "message": "決済情報を確認できませんでした。"},
+                status_code=400
+            )
+
+        try:
+            client = get_stripe_client()
+            session = client.v1.checkout.sessions.retrieve(clean_session_id)
+            if checkout_session_user_id(session) != current_user.id:
+                return JSONResponse(
+                    {"error": "checkout_session_not_found", "message": "決済情報を確認できませんでした。"},
+                    status_code=404
+                )
+
+            if sync_checkout_session_from_stripe(session, expected_user_id=current_user.id):
+                subscription_id = stripe_resource_id(stripe_field(session, "subscription"))
+                if subscription_id:
+                    subscription = client.v1.subscriptions.retrieve(subscription_id)
+                    sync_subscription_from_stripe(
+                        subscription,
+                        expected_user_id=current_user.id
+                    )
+        except stripe.StripeError:
+            logger.exception("stripe_checkout_reconcile_failed user_id=%s", current_user.id)
+            return JSONResponse(
+                {"error": "billing_provider_unavailable", "message": "決済状況の確認に失敗しました。少し待ってから再読み込みしてください。"},
+                status_code=502
+            )
+
+    return billing_status_payload(current_user.id)
+
+
+@app.post("/api/billing/checkout")
+def api_billing_checkout(request: Request):
+    current_user = get_current_user(request)
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+    if normalize_subscription_plan(current_user.subscription_plan) == PREMIUM_PLAN:
+        return JSONResponse(
+            {"error": "already_premium", "message": "すでにPremiumを利用中です。"},
+            status_code=409
+        )
+    if not stripe_billing_configured():
+        return JSONResponse(
+            {"error": "billing_not_configured", "message": "決済設定を準備中です。"},
+            status_code=503
+        )
+    if not legal_commerce_configured():
+        return JSONResponse(
+            {
+                "error": "legal_disclosure_not_configured",
+                "message": "特定商取引法に基づく表示を準備中です。"
+            },
+            status_code=503
+        )
+
+    try:
+        client = get_stripe_client()
+        price_id = (os.getenv("STRIPE_PREMIUM_PRICE_ID") or "").strip()
+        price = client.v1.prices.retrieve(price_id)
+        if not validate_premium_price(price):
+            logger.error("stripe_premium_price_mismatch price_id=%s", price_id)
+            return JSONResponse(
+                {"error": "billing_price_mismatch", "message": "Premiumの料金設定を確認中です。"},
+                status_code=503
+            )
+
+        base_url = build_base_url(request)
+        user_reference = str(current_user.id)
+        checkout_params = {
+            "mode": "subscription",
+            "line_items": [{"price": price_id, "quantity": 1}],
+            "client_reference_id": user_reference,
+            "metadata": {"user_id": user_reference, "plan": PREMIUM_PLAN},
+            "subscription_data": {
+                "metadata": {"user_id": user_reference, "plan": PREMIUM_PLAN}
+            },
+            "success_url": (
+                f"{base_url}/premium?checkout=success&"
+                "session_id={CHECKOUT_SESSION_ID}"
+            ),
+            "cancel_url": f"{base_url}/premium?checkout=cancelled",
+            "locale": "ja"
+        }
+        if current_user.stripe_customer_id:
+            checkout_params["customer"] = current_user.stripe_customer_id
+        else:
+            checkout_params["customer_email"] = current_user.email
+
+        checkout_session = client.v1.checkout.sessions.create(checkout_params)
+        checkout_url = stripe_field(checkout_session, "url", "")
+        if not checkout_url:
+            raise stripe.StripeError("Checkout URL was not returned")
+        return {"url": checkout_url}
+    except stripe.StripeError:
+        logger.exception("stripe_checkout_create_failed user_id=%s", current_user.id)
+        return JSONResponse(
+            {"error": "billing_provider_unavailable", "message": "決済ページを開けませんでした。少し待ってからもう一度お試しください。"},
+            status_code=502
+        )
+
+
+@app.post("/api/billing/portal")
+def api_billing_portal(request: Request):
+    current_user = get_current_user(request)
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+    if not stripe_billing_configured():
+        return JSONResponse(
+            {"error": "billing_not_configured", "message": "請求管理を準備中です。"},
+            status_code=503
+        )
+    if not current_user.stripe_customer_id:
+        return JSONResponse(
+            {"error": "billing_customer_not_found", "message": "管理できる請求情報がありません。"},
+            status_code=409
+        )
+
+    try:
+        client = get_stripe_client()
+        portal_session = client.v1.billing_portal.sessions.create({
+            "customer": current_user.stripe_customer_id,
+            "return_url": f"{build_base_url(request)}/premium"
+        })
+        portal_url = stripe_field(portal_session, "url", "")
+        if not portal_url:
+            raise stripe.StripeError("Billing portal URL was not returned")
+        return {"url": portal_url}
+    except stripe.StripeError:
+        logger.exception("stripe_portal_create_failed user_id=%s", current_user.id)
+        return JSONResponse(
+            {"error": "billing_provider_unavailable", "message": "請求管理ページを開けませんでした。少し待ってからもう一度お試しください。"},
+            status_code=502
+        )
+
+
+@app.post("/api/billing/webhook")
+async def api_billing_webhook(request: Request):
+    webhook_secret = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+    signature = request.headers.get("stripe-signature", "")
+    client = get_stripe_client()
+    if not client or not webhook_secret:
+        return JSONResponse({"error": "billing_not_configured"}, status_code=503)
+    if not signature:
+        return JSONResponse({"error": "invalid_webhook_signature"}, status_code=400)
+
+    payload = await request.body()
+    try:
+        event = client.construct_event(payload, signature, webhook_secret)
+    except (ValueError, stripe.StripeError):
+        logger.warning("stripe_webhook_signature_rejected")
+        return JSONResponse({"error": "invalid_webhook_signature"}, status_code=400)
+
+    event_type = stripe_field(event, "type", "")
+    event_created_at = stripe_field(event, "created")
+    event_data = stripe_field(event, "data", {}) or {}
+    resource = stripe_field(event_data, "object", {}) or {}
+
+    if event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted"
+    }:
+        sync_subscription_from_stripe(resource, event_created_at=event_created_at)
+    elif event_type in {
+        "checkout.session.completed",
+        "checkout.session.async_payment_succeeded"
+    }:
+        sync_checkout_session_from_stripe(resource, event_created_at=event_created_at)
+
+    return {"received": True}
 
 
 @app.get("/api/chat")
@@ -8159,6 +9043,7 @@ def api_diary_chat(request: Request):
         "settings": {
             "response_length": settings.response_length
         },
+        "plan_usage": load_plan_usage(current_user.id),
         "thread": serialize_thread(study_thread),
         "messages": serialize_chat_items(chat_items)
     }
@@ -8186,6 +9071,7 @@ def api_chat_thread(request: Request, thread_id: int):
         "settings": {
             "response_length": settings.response_length
         },
+        "plan_usage": load_plan_usage(current_user.id),
         "thread": serialize_thread(thread),
         "messages": serialize_chat_items(chat_items)
     }
@@ -8241,6 +9127,14 @@ def api_chat_message_create(request: Request, thread_id: int, payload: ChatMessa
     if len(clean_message) > CHAT_MESSAGE_MAX_LENGTH:
         return JSONResponse({"error": "message_too_long"}, status_code=400)
 
+    roadmap_limit = roadmap_creation_limit_response(
+        thread,
+        current_user.id,
+        clean_message
+    )
+    if roadmap_limit:
+        return roadmap_limit
+
     chat_items = process_chat_message(
         thread,
         current_user.id,
@@ -8281,6 +9175,14 @@ def api_chat_message_stream(request: Request, thread_id: int, payload: ChatMessa
 
     if len(clean_message) > CHAT_MESSAGE_MAX_LENGTH:
         return JSONResponse({"error": "message_too_long"}, status_code=400)
+
+    roadmap_limit = roadmap_creation_limit_response(
+        thread,
+        current_user.id,
+        clean_message
+    )
+    if roadmap_limit:
+        return roadmap_limit
 
     return StreamingResponse(
         stream_chat_message_events(
@@ -8365,7 +9267,8 @@ def api_bookshelves(request: Request):
         return JSONResponse({"error": "login_required"}, status_code=401)
 
     return {
-        "bookshelves": load_bookshelves(current_user.id)
+        "bookshelves": load_bookshelves(current_user.id),
+        "plan_usage": load_plan_usage(current_user.id)
     }
 
 
@@ -8376,7 +9279,9 @@ def api_bookshelf(request: Request, subject: str):
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
-    return load_bookshelf(subject, current_user.id)
+    bookshelf = load_bookshelf(subject, current_user.id)
+    bookshelf["plan_usage"] = load_plan_usage(current_user.id)
+    return bookshelf
 
 
 @app.get("/api/roadmaps")
@@ -8387,7 +9292,8 @@ def api_roadmaps(request: Request):
         return JSONResponse({"error": "login_required"}, status_code=401)
 
     return {
-        "subjects": load_roadmap_overview(current_user.id)
+        "subjects": load_roadmap_overview(current_user.id),
+        "plan_usage": load_plan_usage(current_user.id)
     }
 
 
@@ -8407,7 +9313,8 @@ def api_roadmap_delete(request: Request, payload: RoadmapDeletePayload):
 
     return {
         "ok": True,
-        "result": result
+        "result": result,
+        "plan_usage": load_plan_usage(current_user.id)
     }
 
 
@@ -8428,6 +9335,24 @@ def api_textbook_detail(request: Request, textbook_id: int):
     }
 
 
+@app.delete("/api/textbooks/{textbook_id}")
+def api_textbook_delete(request: Request, textbook_id: int):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return JSONResponse({"error": "login_required"}, status_code=401)
+
+    result = delete_study_textbook(textbook_id, current_user.id)
+    if result is None:
+        return JSONResponse({"error": "textbook_not_found"}, status_code=404)
+
+    return {
+        "ok": True,
+        "result": result,
+        "plan_usage": result["plan_usage"]
+    }
+
+
 @app.post("/api/chat/{thread_id}/textbook_preview")
 def api_textbook_preview(request: Request, thread_id: int, payload: TextbookPreviewPayload):
     current_user = get_current_user(request)
@@ -8443,10 +9368,25 @@ def api_textbook_preview(request: Request, thread_id: int, payload: TextbookPrev
     if thread.thread_type != STUDY_THREAD_TYPE:
         return JSONResponse({"error": "study_thread_required"}, status_code=400)
 
+    plan_usage = load_plan_usage(current_user.id)
+    if (
+        plan_usage["textbooks"]["reached"]
+        and not load_textbook_options_for_subject(thread.title, current_user.id)
+    ):
+        return plan_limit_error_response("textbooks", plan_usage)
+
     preview = create_textbook_preview(thread, current_user.id, payload.source_note)
 
+    if (
+        preview
+        and preview.get("mode") != "update"
+        and plan_usage["textbooks"]["reached"]
+    ):
+        return plan_limit_error_response("textbooks", plan_usage)
+
     return {
-        "preview": preview
+        "preview": preview,
+        "plan_usage": plan_usage
     }
 
 
@@ -8457,7 +9397,10 @@ def api_textbook_confirm(request: Request, payload: TextbookConfirmPayload):
     if current_user is None:
         return JSONResponse({"error": "login_required"}, status_code=401)
 
-    textbook = confirm_textbook_preview(payload, current_user.id)
+    try:
+        textbook = confirm_textbook_preview(payload, current_user.id)
+    except PlanLimitReached as error:
+        return plan_limit_error_response(error.asset_type, error.usage)
 
     if textbook is None:
         return JSONResponse({"error": "textbook_save_failed"}, status_code=400)
@@ -8538,6 +9481,16 @@ def bookshelf_page(request: Request, subject: str):
 
 @app.get("/roadmaps")
 def roadmaps_page(request: Request):
+    current_user = get_current_user(request)
+
+    if current_user is None:
+        return RedirectResponse(url="/login", status_code=303)
+
+    return render_react_app(request, current_user)
+
+
+@app.get("/premium")
+def premium_page(request: Request):
     current_user = get_current_user(request)
 
     if current_user is None:
@@ -8945,6 +9898,19 @@ def account_delete(request: Request, password: str = Form("")):
             status_code=400
         )
 
+    if not cancel_user_stripe_subscription(current_user):
+        settings = load_settings(current_user.id)
+        return templates.TemplateResponse(
+            request=request,
+            name="settings.html",
+            context={
+                "settings": settings,
+                "account_error": "Premiumの継続課金を停止できなかったため、アカウントは削除していません。請求管理を確認してからもう一度お試しください。",
+                "asset_version": ASSET_VERSION
+            },
+            status_code=502
+        )
+
     request.session.clear()
     delete_user_account(current_user.id)
     response = RedirectResponse(url="/signup?account_deleted=1", status_code=303)
@@ -8957,7 +9923,37 @@ def privacy_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="privacy.html",
-        context={"asset_version": ASSET_VERSION}
+        context={
+            "asset_version": ASSET_VERSION,
+            "privacy_version": PRIVACY_VERSION,
+            "effective_date": TERMS_EFFECTIVE_DATE
+        }
+    )
+
+
+@app.get("/terms")
+def terms_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="terms.html",
+        context={
+            "asset_version": ASSET_VERSION,
+            "terms_version": TERMS_VERSION,
+            "effective_date": TERMS_EFFECTIVE_DATE
+        }
+    )
+
+
+@app.get("/commerce-disclosure")
+def commerce_disclosure_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="commerce_disclosure.html",
+        context={
+            "asset_version": ASSET_VERSION,
+            "legal": legal_commerce_details(),
+            "legal_configured": legal_commerce_configured()
+        }
     )
 
 @app.post("/chat/{thread_id}")

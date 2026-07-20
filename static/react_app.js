@@ -22,11 +22,28 @@
             return null;
         }
 
-        if (!response.ok) {
-            throw new Error("request_failed");
+        let responseData = null;
+        try {
+            responseData = await response.json();
+        } catch (err) {
+            responseData = null;
         }
 
-        return response.json();
+        if (!response.ok) {
+            const requestError = new Error(
+                responseData && responseData.message
+                    ? responseData.message
+                    : "request_failed"
+            );
+            requestError.code = responseData && responseData.error
+                ? responseData.error
+                : "request_failed";
+            requestError.status = response.status;
+            requestError.details = responseData || {};
+            throw requestError;
+        }
+
+        return responseData;
     }
 
     function parseSseBlock(block) {
@@ -60,7 +77,27 @@
             return;
         }
 
-        if (!response.ok || !response.body) {
+        if (!response.ok) {
+            let responseData = null;
+            try {
+                responseData = await response.json();
+            } catch (err) {
+                responseData = null;
+            }
+            const requestError = new Error(
+                responseData && responseData.message
+                    ? responseData.message
+                    : "request_failed"
+            );
+            requestError.code = responseData && responseData.error
+                ? responseData.error
+                : "request_failed";
+            requestError.status = response.status;
+            requestError.details = responseData || {};
+            throw requestError;
+        }
+
+        if (!response.body) {
             throw new Error("request_failed");
         }
 
@@ -1121,6 +1158,8 @@
             screen = h(BookshelfScreen, { route, navigate });
         } else if (route.startsWith("/textbook/")) {
             screen = h(TextbookScreen, { route, navigate });
+        } else if (route === "/premium") {
+            screen = h(PremiumScreen, { navigate });
         } else {
             screen = h(HomeScreen, { navigate });
         }
@@ -1151,6 +1190,377 @@
             { className: "loading-label" },
             h("span", { className: "mini-spinner" }),
             text
+        );
+    }
+
+    function PlanUsageSummary({ label, usage }) {
+        if (!usage) {
+            return null;
+        }
+
+        return h(
+            "section",
+            { className: `plan-usage-summary${usage.reached ? " plan-usage-reached" : ""}` },
+            h("span", null, label),
+            h("strong", null, usage.unlimited ? "無制限" : `${usage.used} / ${usage.limit}`),
+            usage.unlimited ? h("small", null, "Premium") : h("small", null, "Freeプラン")
+        );
+    }
+
+    function PlanLimitNotice({ assetType, usage, navigate, onManage }) {
+        if (!usage || !usage.reached) {
+            return null;
+        }
+
+        const isTextbook = assetType === "textbooks";
+        const message = isTextbook
+            ? "無料プランでは教科書は3冊までです。"
+            : "無料プランではロードマップは3つまでです。";
+
+        return h(
+            "section",
+            { className: "plan-limit-notice", role: "status" },
+            h("p", { className: "section-kicker" }, "Freeプランの上限"),
+            h("h2", null, message),
+            h("p", null, "不要なものを削除すると、すぐに新しく作成できます。"),
+            h(
+                "div",
+                { className: "plan-limit-actions" },
+                h(
+                    "button",
+                    { type: "button", onClick: onManage },
+                    isTextbook ? "教科書を削除する" : "ロードマップを削除する"
+                ),
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "premium-upgrade-button",
+                        onClick: function () {
+                            navigate("/premium", { message: "Premiumをご案内しています" });
+                        }
+                    },
+                    "Premiumへアップグレード"
+                )
+            )
+        );
+    }
+
+    function PlanLimitModal({ assetType, onClose, navigate }) {
+        if (!assetType) {
+            return null;
+        }
+
+        const isTextbook = assetType === "textbooks";
+        return h(
+            "div",
+            { className: "plan-limit-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "plan-limit-title" },
+            h(
+                "div",
+                { className: "plan-limit-modal-card" },
+                h("p", { className: "section-kicker" }, "Freeプランの上限"),
+                h(
+                    "h2",
+                    { id: "plan-limit-title" },
+                    isTextbook
+                        ? "無料プランでは教科書は3冊までです。"
+                        : "無料プランではロードマップは3つまでです。"
+                ),
+                h("p", null, "削除すると、新しいものをすぐに作成できます。"),
+                h(
+                    "div",
+                    { className: "plan-limit-actions" },
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            onClick: function () {
+                                navigate(isTextbook ? "/bookshelves" : "/roadmaps", {
+                                    message: isTextbook ? "本棚を開いています" : "ロードマップを開いています"
+                                });
+                            }
+                        },
+                        isTextbook ? "教科書を削除する" : "ロードマップを削除する"
+                    ),
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            className: "premium-upgrade-button",
+                            onClick: function () {
+                                navigate("/premium", { message: "Premiumをご案内しています" });
+                            }
+                        },
+                        "Premiumへアップグレード"
+                    ),
+                    h("button", { type: "button", className: "secondary-button", onClick: onClose }, "閉じる")
+                )
+            )
+        );
+    }
+
+    function PremiumScreen({ navigate }) {
+        const [billingStatus, setBillingStatus] = useState(null);
+        const [loading, setLoading] = useState(true);
+        const [billingAction, setBillingAction] = useState("");
+        const [error, setError] = useState("");
+        const [showCheckoutConfirm, setShowCheckoutConfirm] = useState(false);
+        const [purchaseConfirmed, setPurchaseConfirmed] = useState(false);
+        const query = new URLSearchParams(window.location.search);
+        const checkoutResult = query.get("checkout") || "";
+        const checkoutSessionId = query.get("session_id") || "";
+
+        useEffect(function () {
+            let active = true;
+            const statusPath = checkoutSessionId
+                ? `/api/billing/status?checkout_session_id=${encodeURIComponent(checkoutSessionId)}`
+                : "/api/billing/status";
+
+            api(statusPath).then(function (data) {
+                if (active && data) {
+                    setBillingStatus(data);
+                    setError("");
+                }
+            }).catch(function (requestError) {
+                if (active) {
+                    setError(requestError.message || "決済状況を確認できませんでした。");
+                }
+            }).finally(function () {
+                if (active) {
+                    setLoading(false);
+                }
+            });
+            return function () {
+                active = false;
+            };
+        }, [checkoutSessionId]);
+
+        function openBillingPage(path, actionName) {
+            if (billingAction) {
+                return;
+            }
+            setBillingAction(actionName);
+            setError("");
+            api(path, { method: "POST", body: JSON.stringify({}) }).then(function (data) {
+                if (!data || !data.url) {
+                    throw new Error("決済ページを開けませんでした。");
+                }
+                window.location.assign(data.url);
+            }).catch(function (requestError) {
+                setError(requestError.message || "決済ページを開けませんでした。");
+                setBillingAction("");
+            });
+        }
+
+        const planUsage = billingStatus && billingStatus.plan_usage;
+        const isPremium = Boolean(planUsage && planUsage.is_premium);
+        const billingConfigured = Boolean(billingStatus && billingStatus.billing_configured);
+        const canManageBilling = Boolean(billingStatus && billingStatus.can_manage_billing);
+        let billingButtonLabel = "決済機能を準備中";
+        let billingButtonDisabled = true;
+        let billingButtonAction = null;
+
+        if (loading) {
+            billingButtonLabel = "プランを確認中";
+        } else if (isPremium && canManageBilling) {
+            billingButtonLabel = billingAction === "portal" ? "請求管理を開いています" : "請求・解約を管理";
+            billingButtonDisabled = Boolean(billingAction);
+            billingButtonAction = function () {
+                openBillingPage("/api/billing/portal", "portal");
+            };
+        } else if (isPremium) {
+            billingButtonLabel = "現在Premiumを利用中";
+        } else if (billingConfigured) {
+            billingButtonLabel = billingAction === "checkout" ? "決済ページを開いています" : "月額800円で始める";
+            billingButtonDisabled = Boolean(billingAction);
+            billingButtonAction = function () {
+                setPurchaseConfirmed(false);
+                setShowCheckoutConfirm(true);
+            };
+        } else if (
+            billingStatus
+            && billingStatus.stripe_configured
+            && !billingStatus.legal_disclosure_configured
+        ) {
+            billingButtonLabel = "販売者情報を準備中";
+        }
+
+        return h(
+            "main",
+            { className: "study-app premium-page" },
+            h(
+                "header",
+                { className: "study-chat-header library-header" },
+                h(
+                    "button",
+                    {
+                        type: "button",
+                        className: "plain-back",
+                        onClick: function () {
+                            navigate("/", { direction: "back", message: "ホームへ戻っています" });
+                        }
+                    },
+                    "戻る"
+                ),
+                h("div", { className: "library-title-block" }, h("p", { className: "eyebrow" }, "Study PAS"), h("h1", null, "Premium")),
+                h("span", null)
+            ),
+            h(
+                "section",
+                { className: "premium-hero" },
+                h("p", { className: "section-kicker" }, "長く学び続けるためのプラン"),
+                h("h2", null, "学習資産を、制限なく育てる。"),
+                h("div", { className: "premium-price" }, h("strong", null, "800円"), h("span", null, "/ 月")),
+                h("p", null, "AIチャットや授業ではなく、長期間育てる教科書とロードマップを無制限にします。")
+            ),
+            checkoutResult === "success" && h(
+                "section",
+                {
+                    className: `billing-result-banner ${isPremium ? "billing-result-success" : ""}`,
+                    role: "status"
+                },
+                h("strong", null, isPremium ? "Premiumが有効になりました。" : "お支払いを確認しています。"),
+                h("p", null, isPremium ? "教科書とロードマップを無制限で作成できます。" : "反映されない場合は、少し待ってからこのページを再読み込みしてください。")
+            ),
+            checkoutResult === "cancelled" && h(
+                "section",
+                { className: "billing-result-banner", role: "status" },
+                h("strong", null, "決済はキャンセルされました。"),
+                h("p", null, "料金は発生していません。いつでもここから再開できます。")
+            ),
+            billingStatus && billingStatus.subscription_status === "past_due" && h(
+                "section",
+                { className: "billing-result-banner billing-result-warning", role: "alert" },
+                h("strong", null, "お支払い情報の確認が必要です。"),
+                h("p", null, "請求・解約を管理から支払い方法をご確認ください。")
+            ),
+            error && h(
+                "section",
+                { className: "billing-result-banner billing-result-error", role: "alert" },
+                h("strong", null, "決済処理を完了できませんでした。"),
+                h("p", null, error)
+            ),
+            h(
+                "section",
+                { className: "premium-plan-grid" },
+                h(
+                    "article",
+                    { className: "premium-plan-card" },
+                    h("span", null, "Free"),
+                    h("h2", null, "0円"),
+                    h("ul", null,
+                        h("li", null, "AIチャット・AI授業"),
+                        h("li", null, "AI教科書 3冊まで"),
+                        h("li", null, "AIロードマップ 3つまで")
+                    )
+                ),
+                h(
+                    "article",
+                    { className: "premium-plan-card premium-plan-featured" },
+                    h("span", null, "Premium"),
+                    h("h2", null, "月額800円"),
+                    h("ul", null,
+                        h("li", null, "AI教科書 無制限"),
+                        h("li", null, "AIロードマップ 無制限"),
+                        h("li", null, "今後追加されるPremium機能")
+                    ),
+                    h(
+                        "button",
+                        {
+                            type: "button",
+                            disabled: billingButtonDisabled,
+                            onClick: billingButtonAction
+                        },
+                        billingButtonLabel
+                    ),
+                    h("p", { className: "premium-billing-note" }, "毎月自動更新されます。解約は請求管理ページからいつでも行えます。決済情報はStripeが安全に処理します。")
+                )
+            ),
+            h(
+                "section",
+                { className: "premium-future-card" },
+                h("p", { className: "section-kicker" }, "今後追加予定"),
+                h("h2", null, "先生が、もっと深く学習を理解する。"),
+                h("ul", null,
+                    h("li", null, "長期Memory強化"),
+                    h("li", null, "過去の学習を使った高度な分析"),
+                    h("li", null, "英語学習の音声機能"),
+                    h("li", null, "優先処理と追加機能")
+                )
+            ),
+            h(
+                "section",
+                { className: "premium-recommended" },
+                h("h2", null, "こんな人におすすめ"),
+                h("p", null, "複数教科を学びたい / 長期間続けたい / 自分専用の教科書を育てたい / AIに学習履歴を覚えていてほしい")
+            ),
+            showCheckoutConfirm && h(
+                "div",
+                { className: "purchase-confirm-modal", role: "dialog", "aria-modal": "true", "aria-labelledby": "purchase-confirm-title" },
+                h(
+                    "section",
+                    { className: "purchase-confirm-card" },
+                    h("p", { className: "section-kicker" }, "お申込みの最終確認"),
+                    h("h2", { id: "purchase-confirm-title" }, "Study PAS Premium"),
+                    h(
+                        "dl",
+                        { className: "purchase-confirm-list" },
+                        h("div", null, h("dt", null, "料金"), h("dd", null, "月額800円（支払総額）")),
+                        h("div", null, h("dt", null, "更新"), h("dd", null, "解約するまで毎月自動更新")),
+                        h("div", null, h("dt", null, "提供内容"), h("dd", null, "AI教科書・AIロードマップ 無制限")),
+                        h("div", null, h("dt", null, "支払時期"), h("dd", null, "申込時と、その後毎月の更新日")),
+                        h("div", null, h("dt", null, "提供開始"), h("dd", null, "決済完了後")),
+                        h("div", null, h("dt", null, "解約"), h("dd", null, "Premium画面の請求管理から手続き")),
+                        h("div", null, h("dt", null, "返金"), h("dd", null, "提供開始後の利用者都合による返金なし。法令上必要な場合・誤請求等を除く"))
+                    ),
+                    h(
+                        "p",
+                        { className: "purchase-confirm-links" },
+                        h("a", { href: "/terms", target: "_blank", rel: "noopener" }, "利用規約"),
+                        "・",
+                        h("a", { href: "/commerce-disclosure", target: "_blank", rel: "noopener" }, "特定商取引法に基づく表示")
+                    ),
+                    h(
+                        "label",
+                        { className: "purchase-confirm-check" },
+                        h("input", {
+                            type: "checkbox",
+                            checked: purchaseConfirmed,
+                            onChange: function (event) {
+                                setPurchaseConfirmed(event.target.checked);
+                            }
+                        }),
+                        h("span", null, "上記の料金・自動更新・解約・返金条件を確認しました。")
+                    ),
+                    h(
+                        "div",
+                        { className: "purchase-confirm-actions" },
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                className: "secondary-button",
+                                disabled: Boolean(billingAction),
+                                onClick: function () {
+                                    setShowCheckoutConfirm(false);
+                                }
+                            },
+                            "戻る"
+                        ),
+                        h(
+                            "button",
+                            {
+                                type: "button",
+                                disabled: !purchaseConfirmed || Boolean(billingAction),
+                                onClick: function () {
+                                    openBillingPage("/api/billing/checkout", "checkout");
+                                }
+                            },
+                            billingAction === "checkout" ? "Stripeを開いています" : "月額800円で申し込む"
+                        )
+                    )
+                )
+            )
         );
     }
 
@@ -1494,6 +1904,7 @@
         }, []);
 
         const subjects = data ? data.subjects || [] : [];
+        const roadmapUsage = data && data.plan_usage ? data.plan_usage.roadmaps : null;
         const statusLabels = {
             learned: "理解済み",
             learning: "学習中",
@@ -1526,7 +1937,7 @@
             setError("");
 
             try {
-                await api("/api/roadmaps", {
+                const response = await api("/api/roadmaps", {
                     method: "DELETE",
                     body: JSON.stringify({
                         subject: subject.subject,
@@ -1537,9 +1948,13 @@
                     const currentSubjects = currentData && currentData.subjects ? currentData.subjects : [];
 
                     return {
+                        ...currentData,
                         subjects: currentSubjects.filter(function (item) {
                             return item.subject !== subject.subject;
-                        })
+                        }),
+                        plan_usage: response && response.plan_usage
+                            ? response.plan_usage
+                            : currentData.plan_usage
                     };
                 });
             } catch (err) {
@@ -1581,6 +1996,18 @@
                 h("h2", null, "先生と同じロードマップで、今いる場所を確認する。"),
                 h("p", null, "順番はおすすめです。好きな教材や単元から始めても、先生が必要な前提知識を補いながら進めます。")
             ),
+            h(PlanUsageSummary, { label: "ロードマップ", usage: roadmapUsage }),
+            h(PlanLimitNotice, {
+                assetType: "roadmaps",
+                usage: roadmapUsage,
+                navigate: navigate,
+                onManage: function () {
+                    const list = document.querySelector(".roadmap-overview-list");
+                    if (list) {
+                        list.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }
+                }
+            }),
             error ? h("p", { className: "notice" }, error) : null,
             !data
                 ? h("p", { className: "react-loading" }, "読み込み中")
@@ -1771,6 +2198,7 @@
         }, []);
 
         const bookshelves = data ? data.bookshelves : [];
+        const textbookUsage = data && data.plan_usage ? data.plan_usage.textbooks : null;
 
         return h(
             "main",
@@ -1804,6 +2232,18 @@
                 h("h2", null, "授業から作った教科書を、分野ごとに読む。"),
                 h("p", null, "教科書はユーザーが承認した内容だけ保存されます。")
             ),
+            h(PlanUsageSummary, { label: "教科書", usage: textbookUsage }),
+            h(PlanLimitNotice, {
+                assetType: "textbooks",
+                usage: textbookUsage,
+                navigate: navigate,
+                onManage: function () {
+                    const list = document.querySelector(".bookshelf-grid");
+                    if (list) {
+                        list.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }
+                }
+            }),
             error ? h("p", { className: "notice" }, error) : null,
             !data
                 ? h("p", { className: "react-loading" }, "読み込み中")
@@ -1840,6 +2280,7 @@
         const subject = decodeURIComponent(route.replace(/^\/bookshelf\//, ""));
         const [data, setData] = useState(null);
         const [error, setError] = useState("");
+        const [deletingTextbookId, setDeletingTextbookId] = useState(null);
 
         useEffect(function () {
             let active = true;
@@ -1864,6 +2305,39 @@
         }, [subject]);
 
         const textbooks = data ? data.textbooks : [];
+        const textbookUsage = data && data.plan_usage ? data.plan_usage.textbooks : null;
+
+        async function deleteTextbook(textbook) {
+            if (!textbook || deletingTextbookId) {
+                return;
+            }
+
+            if (!window.confirm(`教科書「${textbook.title}」を削除しますか？\n\n教科書の内容・更新履歴・この教科書の添削結果が削除されます。`)) {
+                return;
+            }
+
+            setDeletingTextbookId(textbook.id);
+            setError("");
+
+            try {
+                const response = await api(`/api/textbooks/${textbook.id}`, { method: "DELETE" });
+                setData(function (currentData) {
+                    return {
+                        ...currentData,
+                        textbooks: (currentData.textbooks || []).filter(function (item) {
+                            return item.id !== textbook.id;
+                        }),
+                        plan_usage: response && response.plan_usage
+                            ? response.plan_usage
+                            : currentData.plan_usage
+                    };
+                });
+            } catch (err) {
+                setError("教科書を削除できませんでした。もう一度試してください。");
+            } finally {
+                setDeletingTextbookId(null);
+            }
+        }
 
         return h(
             "main",
@@ -1890,6 +2364,18 @@
                 ),
                 h("span", null)
             ),
+            h(PlanUsageSummary, { label: "教科書", usage: textbookUsage }),
+            h(PlanLimitNotice, {
+                assetType: "textbooks",
+                usage: textbookUsage,
+                navigate: navigate,
+                onManage: function () {
+                    const list = document.querySelector(".textbook-list");
+                    if (list) {
+                        list.scrollIntoView({ behavior: "smooth", block: "start" });
+                    }
+                }
+            }),
             error ? h("p", { className: "notice" }, error) : null,
             !data
                 ? h("p", { className: "react-loading" }, "読み込み中")
@@ -1902,18 +2388,33 @@
                             { className: "textbook-list" },
                             textbooks.map(function (textbook) {
                                 return h(
-                                    "button",
-                                    {
-                                        key: textbook.id,
-                                        type: "button",
-                                        className: "textbook-card",
-                                        onClick: function () {
-                                            navigate(textbook.url, { message: "教科書を開いています" });
-                                        }
-                                    },
-                                    h("span", null, textbook.subject),
-                                    h("strong", null, textbook.title),
-                                    h("small", null, `作成 ${textbook.created_at || "-"} / 更新 ${textbook.updated_at || "-"}`)
+                                    "article",
+                                    { key: textbook.id, className: "textbook-list-row" },
+                                    h(
+                                        "button",
+                                        {
+                                            type: "button",
+                                            className: "textbook-card",
+                                            onClick: function () {
+                                                navigate(textbook.url, { message: "教科書を開いています" });
+                                            }
+                                        },
+                                        h("span", null, textbook.subject),
+                                        h("strong", null, textbook.title),
+                                        h("small", null, `作成 ${textbook.created_at || "-"} / 更新 ${textbook.updated_at || "-"}`)
+                                    ),
+                                    h(
+                                        "button",
+                                        {
+                                            type: "button",
+                                            className: "asset-delete-button",
+                                            disabled: deletingTextbookId === textbook.id,
+                                            onClick: function () {
+                                                deleteTextbook(textbook);
+                                            }
+                                        },
+                                        deletingTextbookId === textbook.id ? h(LoadingLabel, { text: "削除中" }) : "削除"
+                                    )
                                 );
                             })
                         )
@@ -2454,6 +2955,7 @@
         const [textbookPreview, setTextbookPreview] = useState(null);
         const [previewingTextbook, setPreviewingTextbook] = useState(false);
         const [savingTextbook, setSavingTextbook] = useState(false);
+        const [limitAssetType, setLimitAssetType] = useState("");
         const fileInputRef = useRef(null);
         const abortControllerRef = useRef(null);
         const streamingAssistantRef = useRef("");
@@ -2471,6 +2973,7 @@
             setFailedRequest(null);
             setFile(null);
             setTextbookPreview(null);
+            setLimitAssetType("");
 
             api(apiPath)
                 .then(function (data) {
@@ -2612,11 +3115,15 @@
             } catch (err) {
                 if (err.name !== "AbortError") {
                     streamFailed = true;
-                    setError("送信できませんでした。もう一度試してください。");
-                    setFailedRequest({
-                        message: cleanMessage,
-                        displayMessage: displayMessage || cleanMessage
-                    });
+                    if (err.code === "roadmap_limit_reached") {
+                        setLimitAssetType("roadmaps");
+                    } else {
+                        setError("送信できませんでした。もう一度試してください。");
+                        setFailedRequest({
+                            message: cleanMessage,
+                            displayMessage: displayMessage || cleanMessage
+                        });
+                    }
                 }
             } finally {
                 abortControllerRef.current = null;
@@ -2710,7 +3217,11 @@
                 }
             } catch (err) {
                 if (err.name !== "AbortError") {
-                    setError("送信できませんでした。もう一度試してください。");
+                    if (err.code === "roadmap_limit_reached") {
+                        setLimitAssetType("roadmaps");
+                    } else {
+                        setError("送信できませんでした。もう一度試してください。");
+                    }
                 }
             } finally {
                 abortControllerRef.current = null;
@@ -2721,6 +3232,16 @@
         }
 
         function sendLessonAction(action) {
+            if (
+                action.label === "ロードマップを作る"
+                && chatData
+                && chatData.plan_usage
+                && chatData.plan_usage.roadmaps
+                && chatData.plan_usage.roadmaps.reached
+            ) {
+                setLimitAssetType("roadmaps");
+                return;
+            }
             postTextMessage(action.message, action.label);
         }
 
@@ -2749,6 +3270,17 @@
             }
 
             const previewSourceNote = typeof sourceNote === "string" ? sourceNote : "";
+            const studyContext = chatData.thread && chatData.thread.study_context
+                ? chatData.thread.study_context
+                : {};
+            const textbookUsage = chatData.plan_usage && chatData.plan_usage.textbooks
+                ? chatData.plan_usage.textbooks
+                : null;
+
+            if (textbookUsage && textbookUsage.reached && !studyContext.latest_textbook_title) {
+                setLimitAssetType("textbooks");
+                return;
+            }
 
             setPreviewingTextbook(true);
             setError("");
@@ -2770,7 +3302,11 @@
                     }, 80);
                 }
             } catch (err) {
-                setError("教科書プレビューを作れませんでした。もう一度試してください。");
+                if (err.code === "textbook_limit_reached") {
+                    setLimitAssetType("textbooks");
+                } else {
+                    setError("教科書プレビューを作れませんでした。もう一度試してください。");
+                }
             } finally {
                 setPreviewingTextbook(false);
             }
@@ -2822,7 +3358,11 @@
                     navigate(data.textbook.url, { message: "教科書を開いています" });
                 }
             } catch (err) {
-                setError("教科書を保存できませんでした。もう一度試してください。");
+                if (err.code === "textbook_limit_reached") {
+                    setLimitAssetType("textbooks");
+                } else {
+                    setError("教科書を保存できませんでした。もう一度試してください。");
+                }
             } finally {
                 setSavingTextbook(false);
             }
@@ -3275,7 +3815,14 @@
                             "送信"
                         )
                 )
-            )
+            ),
+            h(PlanLimitModal, {
+                assetType: limitAssetType,
+                navigate: navigate,
+                onClose: function () {
+                    setLimitAssetType("");
+                }
+            })
         );
     }
 

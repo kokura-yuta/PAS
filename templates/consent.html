@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f6f3">
+    <title>利用前の確認 | Study PAS</title>
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="icon" type="image/png" href="/static/icons/icon-192.png">
+    <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
+    <link rel="stylesheet" href="/static/style.css?v={{ asset_version }}">
+</head>
+<body class="study-static-body">
+    <main class="consent-page">
+        <section class="consent-panel">
+            <p class="eyebrow">Study PAS</p>
+            <h1>利用前の大切な確認</h1>
+            <p class="consent-lead">ログインまたは新規登録の前に、AIの性質・データの扱い・利用条件をご確認ください。</p>
+
+            <div class="consent-summary" aria-label="主な利用条件">
+                <article><strong>AIは間違えることがあります</strong><p>試験要項、提出条件、重要な判断は必ず公式情報でも確認してください。</p></article>
+                <article><strong>入力内容をAI処理に使用します</strong><p>回答生成のため、入力・画像・関連する学習履歴をOpenAI APIへ送信します。</p></article>
+                <article><strong>Premiumは月額800円の自動更新です</strong><p>購入時は別途、料金・解約・返金条件を最終確認してからStripeへ進みます。</p></article>
+                <article><strong>法律上の権利は失われません</strong><p>免責や返金条件は、消費者契約法その他の法令で認められる範囲に限り適用されます。</p></article>
+            </div>
+
+            <nav class="consent-document-links" aria-label="利用文書">
+                <a href="/terms" target="_blank" rel="noopener">利用規約（{{ terms_version }}）</a>
+                <a href="/privacy" target="_blank" rel="noopener">プライバシーポリシー（{{ privacy_version }}）</a>
+                <a href="/commerce-disclosure" target="_blank" rel="noopener">特定商取引法に基づく表示</a>
+            </nav>
+
+            {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+
+            <form class="consent-form" method="post" action="/consent">
+                <input type="hidden" name="next" value="{{ next_path }}">
+                <label class="consent-check">
+                    <input type="checkbox" name="accept_terms" required>
+                    <span>利用規約とプライバシーポリシーを読み、内容に同意します。</span>
+                </label>
+                <label class="consent-check">
+                    <input type="checkbox" name="accept_ai_notice" required>
+                    <span>AI回答には誤りがあり得ることを理解し、重要事項は自分でも確認します。</span>
+                </label>
+                <label class="consent-check">
+                    <input type="checkbox" name="accept_age" required>
+                    <span>18歳以上です。18歳未満の場合は、法定代理人の同意を得ています。</span>
+                </label>
+                <button type="submit">同意して次へ</button>
+            </form>
+
+            <p class="consent-meta">規約発効日：{{ effective_date }}。同意した規約版と日時をアカウントに記録します。同意しない場合、Study PASは利用できません。</p>
+        </section>
+    </main>
+    <script src="/static/pwa-register.js?v={{ asset_version }}" defer></script>
+</body>
+</html>

@@ -2,8 +2,11 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#f6f6f3">
     <title>PAS Goals</title>
+    <link rel="manifest" href="/static/manifest.webmanifest">
+    <link rel="apple-touch-icon" href="/static/icons/icon-180.png">
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body class="theme-{{ settings.theme_name }}">
@@ -64,5 +67,6 @@
 
         <a class="back-link" href="/">ホームへ戻る</a>
     </main>
+    <script src="/static/pwa-register.js" defer></script>
 </body>
 </html>
